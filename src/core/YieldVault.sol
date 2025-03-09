@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+/// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
 import "../adapters/interfaces/IProtocolAdapter.sol";
@@ -46,6 +46,15 @@ contract YieldVault is IVault, ERC20, Ownable, ReentrancyGuard {
     // Last rebalance timestamp
     uint256 public lastRebalanceTimestamp;
     
+    // Last harvest timestamp
+    uint256 public lastHarvestTimestamp;
+    
+    // Performance fee percentage (in basis points, e.g., 2000 = 20%)
+    uint256 public performanceFeePercentage;
+    
+    // Fee recipient address
+    address public feeRecipient;
+    
     // --- Events ---
     event Deposited(address indexed user, uint256 assetAmount, uint256 sharesAmount);
     event Withdrawn(address indexed user, uint256 assetAmount, uint256 sharesAmount);
@@ -53,6 +62,9 @@ contract YieldVault is IVault, ERC20, Ownable, ReentrancyGuard {
     event ProtocolRemoved(uint256 protocolId);
     event AllocationUpdated(uint256 protocolId, uint256 previousPercentage, uint256 newPercentage);
     event Rebalanced(uint256 timestamp);
+    event Harvested(uint256 timestamp, uint256 harvestedAmount, uint256 feeAmount);
+    event PerformanceFeeUpdated(uint256 previousPercentage, uint256 newPercentage);
+    event FeeRecipientUpdated(address previousRecipient, address newRecipient);
     
     /**
      * @dev Constructor
@@ -69,6 +81,10 @@ contract YieldVault is IVault, ERC20, Ownable, ReentrancyGuard {
     ) ERC20(_name, _symbol) Ownable(msg.sender) {
         registry = IRegistry(_registry);
         asset = IERC20(_asset);
+        
+        // Set default values
+        performanceFeePercentage = 2000; // 20%
+        feeRecipient = msg.sender;
     }
     
     /**
@@ -243,6 +259,96 @@ contract YieldVault is IVault, ERC20, Ownable, ReentrancyGuard {
     }
     
     /**
+     * @dev Harvest yield from all protocols
+     * @return harvestedAmount Total amount harvested (after fees)
+     */
+    function harvest() external onlyOwner nonReentrant returns (uint256 harvestedAmount) {
+        require(activeProtocolIds.length > 0, "No active protocols");
+        
+        uint256 initialVaultBalance = asset.balanceOf(address(this));
+        uint256 totalHarvested = 0;
+        
+        // Harvest from each protocol
+        for (uint i = 0; i < activeProtocolIds.length; i++) {
+            uint256 protocolId = activeProtocolIds[i];
+            if (protocolAllocations[protocolId].active) {
+                IProtocolAdapter adapter = registry.getAdapter(protocolId, address(asset));
+                
+                try adapter.harvest(address(asset)) returns (uint256 protocolHarvest) {
+                    totalHarvested += protocolHarvest;
+                } catch {
+                    // If harvest fails for any protocol, continue with the next one
+                    continue;
+                }
+            }
+        }
+        
+        // Calculate performance fee
+        uint256 feeAmount = 0;
+        if (totalHarvested > 0 && performanceFeePercentage > 0) {
+            feeAmount = (totalHarvested * performanceFeePercentage) / 10000;
+            
+            // Transfer fee to recipient
+            if (feeAmount > 0 && feeRecipient != address(0)) {
+                // Get harvested amount from protocol adapter
+                uint256 currentVaultBalance = asset.balanceOf(address(this));
+                uint256 receivedBalance = currentVaultBalance - initialVaultBalance;
+                
+                // If we received assets from harvesting, pay the fee
+                if (receivedBalance >= feeAmount) {
+                    asset.transfer(feeRecipient, feeAmount);
+                }
+            }
+        }
+        
+        // Calculate net harvested amount
+        harvestedAmount = totalHarvested - feeAmount;
+        
+        // Update timestamp
+        lastHarvestTimestamp = block.timestamp;
+        
+        emit Harvested(block.timestamp, totalHarvested, feeAmount);
+        return harvestedAmount;
+    }
+    
+    /**
+     * @dev Set minimum reward amount for a specific protocol and asset
+     * @param protocolId The ID of the protocol
+     * @param _asset The address of the asset
+     * @param amount The minimum reward amount
+     */
+    function setProtocolMinRewardAmount(uint256 protocolId, address _asset, uint256 amount) external onlyOwner {
+        require(protocolAllocations[protocolId].active, "Protocol not active");
+        
+        IProtocolAdapter adapter = registry.getAdapter(protocolId, _asset);
+        adapter.setMinRewardAmount(_asset, amount);
+    }
+    
+    /**
+     * @dev Update the performance fee percentage
+     * @param _performanceFeePercentage New performance fee percentage (in basis points)
+     */
+    function updatePerformanceFee(uint256 _performanceFeePercentage) external onlyOwner {
+        require(_performanceFeePercentage <= 3000, "Fee too high"); // Max 30%
+        
+        uint256 oldFee = performanceFeePercentage;
+        performanceFeePercentage = _performanceFeePercentage;
+        emit PerformanceFeeUpdated(oldFee, _performanceFeePercentage);
+    }
+    
+    /**
+     * @dev Update the fee recipient
+     * @param _feeRecipient New fee recipient address
+     */
+    function updateFeeRecipient(address _feeRecipient) external onlyOwner {
+        require(_feeRecipient != address(0), "Invalid address");
+        
+        address oldRecipient = feeRecipient;
+        feeRecipient = _feeRecipient;
+        emit FeeRecipientUpdated(oldRecipient, _feeRecipient);
+    }
+    
+    /**
      * @dev Get total assets managed by the vault (across all protocols and in the vault itself)
      * @return Total assets
      */
@@ -291,6 +397,17 @@ contract YieldVault is IVault, ERC20, Ownable, ReentrancyGuard {
      */
     function getActiveProtocolCount() external view returns (uint256) {
         return activeProtocolIds.length;
+    }
+    
+    /**
+     * @dev Get the time since last harvest
+     * @return Time in seconds since last harvest
+     */
+    function getTimeSinceLastHarvest() external view returns (uint256) {
+        if (lastHarvestTimestamp == 0) {
+            return 0; // Never harvested
+        }
+        return block.timestamp - lastHarvestTimestamp;
     }
     
     /**

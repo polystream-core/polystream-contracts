@@ -39,11 +39,23 @@ interface IProtocolAdapter {
      */
     function isAssetSupported(address asset) external view returns (bool);
 
-     /**
+    /**
      * @dev Get the name of the protocol
      * @return The name of the protocol
      */
     function getProtocolName() external view returns (string memory);
 
+    /**
+     * @dev Harvest yield from the protocol by compounding interest
+     * @param asset The address of the asset
+     * @return harvestedAmount The total amount harvested in asset terms
+     */
+    function harvest(address asset) external returns (uint256 harvestedAmount);
+    
+    /**
+     * @dev Set the minimum reward amount to consider profitable after fees
+     * @param asset The address of the asset
+     * @param amount The minimum reward amount
+     */
+    function setMinRewardAmount(address asset, uint256 amount) external;
 }
-
