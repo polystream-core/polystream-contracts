@@ -5,8 +5,22 @@ pragma solidity ^0.8.19;
 import "forge-std/Test.sol";
 import "forge-std/console.sol";
 
-import "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import "layerbank/interfaces/ICore.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+interface ICore {
+    struct MarketInfo {
+        bool isListed;
+        uint256 supplyCap;
+        uint256 borrowCap;
+        uint256 collateralFactor;
+    }
+
+    function allMarkets() external view returns (address[] memory);
+    function marketInfoOf(address gToken) external view returns (MarketInfo memory);
+    function enterMarkets(address[] calldata gTokens) external;
+    function supply(address gToken, uint256 underlyingAmount) external payable returns (uint256);
+}
+
 
 contract LayerBankSupplyTest is Test {
     // LayerBank contract address - replace with the actual contract address
@@ -42,7 +56,7 @@ contract LayerBankSupplyTest is Test {
     }
     
     // Test 1: Get market information
-    function testMarketInfo() public {
+    function testMarketInfo() public view {
         console.log("===== Market Information =====");
         
         // Get list of all markets
@@ -63,14 +77,10 @@ contract LayerBankSupplyTest is Test {
         }
         
         // Get USDC market data
-        try core.marketInfoOf(USDC_GTOKEN) returns (Constant.MarketInfo memory info) {
+        try core.marketInfoOf(USDC_GTOKEN) returns (ICore.MarketInfo memory info) {
             console.log("===== USDC Market Data =====");
             console.log("USDC gToken:", USDC_GTOKEN);
-            // Log relevant market info based on the structure in your Constant.sol
-            // Example (adjust based on your actual structure):
-            // console.log("Collateral Factor:", info.collateralFactor);
-            // console.log("Borrow Cap:", info.borrowCap);
-            // console.log("Supply Cap:", info.supplyCap);
+            console.log(info.isListed ? "Listed" : "Not listed");
         } catch Error(string memory reason) {
             console.log("Failed to get market data with reason:", reason);
         } catch {

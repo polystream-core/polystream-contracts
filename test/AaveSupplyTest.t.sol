@@ -75,49 +75,8 @@ contract AaveScrollUpdatedTest is Test {
         console.log("USDC balance of test user:", usdc.balanceOf(testUser));
     }
     
-    // Test 1: Get basic market information
-    function testMarketInfo() public {
-        console.log("===== Market Information =====");
-        
-        // Get list of all reserves
-        try pool.getReservesList() returns (address[] memory reserves) {
-            console.log("Number of reserves:", reserves.length);
-            
-            // Find USDC in the reserves list
-            for (uint i = 0; i < reserves.length; i++) {
-                console.log("Reserve", i, ":", reserves[i]);
-                if (reserves[i] == USDC_ADDRESS) {
-                    console.log("USDC found at index:", i);
-                }
-            }
-        } catch Error(string memory reason) {
-            console.log("Failed to get reserves list with reason:", reason);
-        } catch {
-            console.log("Failed to get reserves list with unknown reason");
-        }
-        
-        // Get USDC reserve data
-        try pool.getReserveData(USDC_ADDRESS) returns (
-            uint256 configuration,
-            uint128 liquidityIndex,
-            uint128 variableBorrowIndex,
-            uint16 id,
-            address aTokenAddress
-        ) {
-            console.log("===== USDC Reserve Data =====");
-            console.log("USDC Reserve ID:", id);
-            console.log("USDC Configuration:", configuration);
-            console.log("USDC Liquidity Index:", liquidityIndex);
-            console.log("USDC Variable Borrow Index:", variableBorrowIndex);
-            console.log("aToken Address:", aTokenAddress);
-        } catch Error(string memory reason) {
-            console.log("Failed to get reserve data with reason:", reason);
-        } catch {
-            console.log("Failed to get reserve data with unknown reason");
-        }
-    }
     
-    // Test 2: Try standard supply
+    // Test 1: Try standard supply
     function testStandardSupply() public {
         console.log("===== Testing Standard Supply =====");
         
@@ -149,7 +108,7 @@ contract AaveScrollUpdatedTest is Test {
         console.log("USDC balance change:", initialBalance - finalBalance);
     }
     
-    // Test 3: Try L2 optimized supply
+    // Test 2: Try L2 optimized supply
     function testL2Supply() public {
         console.log("===== Testing L2 Optimized Supply =====");
         

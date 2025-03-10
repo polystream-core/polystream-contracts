@@ -1,3 +1,4 @@
 forge install https://github.com/syncswap/core-contracts.git --no-commit
 forge install https://github.com/aave-dao/aave-v3-origin.git --no-commit
 forge install https://github.com/layerbank/contracts.git --no-commit
+forge install https://github.com/OpenZeppelin/openzeppelin-contracts.git --no-commit
