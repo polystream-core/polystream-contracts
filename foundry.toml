@@ -7,7 +7,7 @@ remappings = [
     "@syncswapcontracts/=lib/core-contracts/contracts/",
     "@layerbank-contracts/=lib/contracts/",
     "@openzeppelin/=lib/openzeppelin-contracts/",
-    "@aave/=lib/aave-v3-origin/src",
+    "@aave/=lib/aave-v3-origin/src/",
     "@forge-std/=lib/forge-std/src/",
 ]
 
