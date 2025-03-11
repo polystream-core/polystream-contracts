@@ -24,24 +24,24 @@ contract RewardManager {
     }
 
     function updateRewardState(uint256 epochReward) external {
+        uint256 totalShares = vault.getTotalSupply();
         uint256 totalWeightedShares = vault.getTotalTimeWeightedShares();
-        if (totalWeightedShares == 0) return;
+
+        uint256 totalEffectiveShares = totalWeightedShares > 0 ? totalWeightedShares : totalShares; 
+
+        if (totalEffectiveShares == 0) return;
 
         console.log("Epoch reward:", epochReward);
-        console.log("Total weighted shares:", totalWeightedShares);
+        console.log("Total effective shares (weighted or total supply):", totalEffectiveShares);
 
-        uint256 totalShares = vault.getTotalSupply();
-        uint256 totalWeight = vault.getTotalTimeWeightedShares();
-        uint256 rewardPerShare = totalWeight > 0 
-            ? (epochReward * PRECISION) / totalWeight 
-            : (epochReward * PRECISION) / totalShares;
-
+        uint256 rewardPerShare = (epochReward * PRECISION) / totalEffectiveShares;
 
         require(rewardPerShare < 1e18, "Reward per share is too large");
 
         accRewardPerShare += rewardPerShare;
         console.log("Updated accRewardPerShare:", accRewardPerShare);
     }
+
 
     function updateUserRewardDebt(address user) external {
         uint256 weightedShares = vault.getUserTimeWeightedShares(user);

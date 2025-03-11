@@ -67,7 +67,7 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         uint256 currentEpoch = getCurrentEpoch();
         uint256 elapsedTime = block.timestamp - lastEpochTime;
         uint256 weightFactor = elapsedTime * PRECISION / EPOCH_DURATION;
-        console.log("elapsed time", elapsedTime);
+        console.log("Elapsed time", elapsedTime);
         console.log("Weight factor", weightFactor);
 
         userEpochDeposits[currentEpoch][user] += amount;
@@ -75,10 +75,15 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         if (!hasDepositedBefore[user]) {
             hasDepositedBefore[user] = true;
             activeUsers.push(user);
-            timeWeightedShares[user] = (amount * weightFactor) / PRECISION;
-        } else {
-            timeWeightedShares[user] += (amount * weightFactor) / PRECISION;
+
+            if (totalPrincipal == 0) {
+                console.log("First depositor detected, full weight assigned.");
+                timeWeightedShares[user] = amount; // First deposit gets full weight
+            } else {
+                timeWeightedShares[user] = (amount * weightFactor) / PRECISION;
+            }
         }
+
 
         userEntryTime[user] = block.timestamp;
 

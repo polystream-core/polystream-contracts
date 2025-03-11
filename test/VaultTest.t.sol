@@ -188,7 +188,7 @@ contract VaultTest is Test {
         // Simulate half an epoch
         vm.warp(block.timestamp + (1 days / 2));
         console.log("Timestamp 2:", block.timestamp);
-        console.log("Midway through Epoch 1:", block.timestamp);
+        console.log("Midway through Epoch 2:", block.timestamp);
 
         // **User2 deposits 2000 USDC mid-epoch**
         vm.startPrank(user2);
@@ -218,5 +218,42 @@ contract VaultTest is Test {
         console.log("User2 Reward Debt:", user2Reward);
 
         assertGt(user1Reward, user2Reward, "User1 should receive a higher reward since User2 deposited mid-epoch.");
+    }
+
+        function testTwoUserRewardDistribution() public {
+        // **User1 deposits 3000 USDC in Epoch 1**
+        vm.startPrank(user1);
+        usdc.approve(address(vault), 3000e6);
+        vault.deposit(user1, 3000e6);
+        vm.stopPrank();
+        
+        console.log("User1 deposited 3000 USDC in Epoch 1");
+
+        vm.startPrank(user2);
+        usdc.approve(address(vault), 2000e6);
+        vault.deposit(user2, 2000e6);
+        vm.stopPrank();
+
+        console.log("User2 deposited 2000 USDC in Epoch 2");
+
+        // Simulate yield deposit
+        vm.startPrank(yieldDepositor);
+        usdc.approve(address(protocolAdapter), 300e6);
+        protocolAdapter.depositFee(300e6);
+        vm.stopPrank();
+
+        console.log("Yield of 300 USDC deposited");
+
+        vm.warp(1761536052);
+        vm.prank(address(vault));
+        vault.checkAndHarvest();
+
+        uint256 user1Reward = rewardManager.getUserRewardDebt(user1);
+        uint256 user2Reward = rewardManager.getUserRewardDebt(user2);
+
+        console.log("User1 Reward Debt:", user1Reward);
+        console.log("User2 Reward Debt:", user2Reward);
+
+        assertGt(user1Reward, user2Reward, "User1 should receive a higher reward than User2 since they were in the vault longer.");
     }
 }
