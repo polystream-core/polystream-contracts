@@ -85,4 +85,11 @@ interface IProtocolAdapter {
      * @param amount The minimum reward amount
      */
     function setMinRewardAmount(address asset, uint256 amount) external;
+    
+    /**
+     * @dev Get the minimum reward amount to consider profitable after fees
+     * @param asset The address of the asset
+     * @return The minimum reward amount
+     */
+    function getEstimatedInterest(address asset) external view returns (uint256);
 }

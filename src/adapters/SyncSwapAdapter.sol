@@ -534,7 +534,30 @@ contract SyncSwapAdapter is IProtocolAdapter, Ownable {
         return 1;
     }
 
+    function getEstimatedInterest(
+        address asset
+    ) external view returns (uint256) {
+        require(supportedAssets[asset], "Asset not supported");
 
+        address poolAddress = pools[asset];
+        uint256 lpBalance = IERC20(poolAddress).balanceOf(address(this));
+
+        if (lpBalance == 0) {
+            return 0;
+        }
+
+        // Calculate estimated interest based on initial deposit and time elapsed
+        uint256 initialDeposit = initialDeposits[asset];
+
+        // Very rough estimation of 3% annual yield
+        // (initialDeposit * 3% * timeElapsed / 365 days)
+        uint256 timeElapsed = block.timestamp - lastHarvestTimestamp[asset];
+        if (timeElapsed == 0 || lastHarvestTimestamp[asset] == 0) {
+            timeElapsed = block.timestamp; // Assume from deployment time
+        }
+
+        return (initialDeposit * 3 * timeElapsed) / (365 days * 100);
+    }
 
 
 
