@@ -523,4 +523,19 @@ contract SyncSwapAdapter is IProtocolAdapter, Ownable {
     ) external onlyOwner {
         IERC20(token).transfer(to, amount);
     }
+
+    function convertFeeToReward(address asset, uint256 fee) external {}
+
+    function getTotalPrincipal(address asset) external view returns (uint256){
+        return 1;
+    }
+
+    function withdrawToUser(address asset, uint256 amount, address user) external returns (uint256){
+        return 1;
+    }
+
+
+
+
+
 }

@@ -5,6 +5,7 @@ import "./interfaces/IProtocolAdapter.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "forge-std/console.sol";
 
 // LayerBank interfaces
 interface IGToken is IERC20 {
@@ -104,6 +105,9 @@ contract LayerBankAdapter is IProtocolAdapter, Ownable {
     // Tracking initial deposits and exchange rates for profit calculation
     mapping(address => uint256) private initialDeposits;
     mapping(address => uint256) private lastExchangeRates;
+
+    // Add tracking for total principal per asset
+    mapping(address => uint256) public totalPrincipal;
 
     // Last harvest timestamp per asset
     mapping(address => uint256) public lastHarvestTimestamp;
@@ -222,7 +226,7 @@ contract LayerBankAdapter is IProtocolAdapter, Ownable {
      * @dev Supply assets to LayerBank
      * @param asset The address of the asset to supply
      * @param amount The amount of the asset to supply
-     * @return The amount of gTokens received
+     * @return The amount of underlying tokens that were actually supplied
      */
     function supply(
         address asset,
@@ -235,47 +239,63 @@ contract LayerBankAdapter is IProtocolAdapter, Ownable {
         require(gToken != address(0), "gToken not found");
 
         // Store the current exchange rate
+        uint256 exchangeRate;
         try IGToken(gToken).exchangeRate() returns (uint256 rate) {
+            exchangeRate = rate;
             lastExchangeRates[asset] = rate;
         } catch {
             // If we can't get the exchange rate, use a default of 1:1
+            exchangeRate = 1e18;
             lastExchangeRates[asset] = 1e18;
         }
 
-        // Get initial gToken balance
-        uint256 balanceBefore = IERC20(gToken).balanceOf(address(this));
+        // Get initial underlying token balance to verify transfer
+        uint256 initialBalance = IERC20(asset).balanceOf(address(this));
 
         // Transfer asset from sender to this contract
         IERC20(asset).transferFrom(msg.sender, address(this), amount);
 
+        // Verify the transfer
+        uint256 receivedAmount = IERC20(asset).balanceOf(address(this)) -
+            initialBalance;
+
         // Update initial deposit tracking
-        initialDeposits[asset] += amount;
+        initialDeposits[asset] += receivedAmount;
+
+        // Update total principal
+        totalPrincipal[asset] += receivedAmount;
 
         // Approve LayerBank to spend asset
-        IERC20(asset).approve(gToken, amount);
+        IERC20(asset).approve(gToken, receivedAmount);
+
+        // Get initial gToken balance
+        uint256 gTokenBalanceBefore = IERC20(gToken).balanceOf(address(this));
 
         // Supply asset to LayerBank
-        core.supply(gToken, amount);
+        try core.supply(gToken, receivedAmount) {
+            // Success
+        } catch {
+            // If supply fails, return 0
+            return 0;
+        }
 
-        // Calculate gTokens received
-        uint256 balanceAfter = IERC20(gToken).balanceOf(address(this));
-        uint256 gTokensReceived = balanceAfter - balanceBefore;
+        // Verify the supply succeeded by checking gToken balance
+        uint256 gTokenBalanceAfter = IERC20(gToken).balanceOf(address(this));
+        uint256 gTokensReceived = gTokenBalanceAfter - gTokenBalanceBefore;
 
-        // Return the gTokens received
-        return gTokensReceived;
+        // Log the receipt
+        console.log("LayerBank supply:", receivedAmount);
+        console.log("gTokens received:", gTokensReceived);
+
+        // Return the underlying amount that was supplied
+        return receivedAmount;
     }
 
     /**
      * @dev Withdraw assets from LayerBank
      * @param asset The address of the asset to withdraw
-     * @param amount The amount of the asset to withdraw
-     * @return The actual amount withdrawn
-     */
-    /**
-     * @dev Withdraw assets from LayerBank
-     * @param asset The address of the asset to withdraw
      * @param amount The amount of the asset to withdraw (in underlying tokens)
-     * @return The actual amount withdrawn
+     * @return The actual amount of underlying tokens withdrawn
      */
     function withdraw(
         address asset,
@@ -286,6 +306,12 @@ contract LayerBankAdapter is IProtocolAdapter, Ownable {
 
         address gToken = gTokens[asset];
         require(gToken != address(0), "gToken not found");
+
+        // Calculate the maximum amount that can be withdrawn
+        uint256 maxWithdrawal = totalPrincipal[asset];
+        uint256 withdrawAmount = (amount > maxWithdrawal)
+            ? maxWithdrawal
+            : amount;
 
         // Get initial asset balance
         uint256 assetBalanceBefore = IERC20(asset).balanceOf(address(this));
@@ -298,63 +324,141 @@ contract LayerBankAdapter is IProtocolAdapter, Ownable {
             exchangeRate = 1e18; // Default to 1:1 if we can't get the exchange rate
         }
 
-        // Calculate the gToken amount based on the underlying amount and exchange rate
-        uint256 gTokenAmount = (amount * 1e18) / exchangeRate;
-
-        // Make sure we don't try to withdraw more than we have
-        uint256 gTokenBalance = IERC20(gToken).balanceOf(address(this));
-        if (gTokenAmount > gTokenBalance) {
-            gTokenAmount = gTokenBalance;
-        }
-
-        // Try multiple withdrawal methods - different protocols name their functions differently
-        try core.redeem(gToken, gTokenAmount) returns (uint256) {
-            // Check if we received the asset
-            uint256 assetBalanceAfter = IERC20(asset).balanceOf(address(this));
-            uint256 received = assetBalanceAfter - assetBalanceBefore;
-
-            // Transfer withdrawn asset to sender
-            IERC20(asset).transfer(msg.sender, received);
-
-            return received;
+        // Try withdrawing directly using redeemUnderlying first (specifies exact underlying amount)
+        bool withdrawSuccess = false;
+        try core.redeemUnderlying(gToken, withdrawAmount) returns (uint256) {
+            withdrawSuccess = true;
         } catch {
-            // Method 2: Try using the core contract's redeemUnderlying function (asset amount)
-            try core.redeemUnderlying(gToken, amount) returns (uint256) {
-                uint256 assetBalanceAfter = IERC20(asset).balanceOf(
-                    address(this)
-                );
-                uint256 received = assetBalanceAfter - assetBalanceBefore;
-
-                IERC20(asset).transfer(msg.sender, received);
-                return received;
+            // Try alternative methods
+            try IGToken(gToken).redeemUnderlying(withdrawAmount) returns (
+                uint256
+            ) {
+                withdrawSuccess = true;
             } catch {
-                // Try the other methods as fallbacks
-                try IGToken(gToken).redeem(gTokenAmount) returns (uint256) {
-                    uint256 assetBalanceAfter = IERC20(asset).balanceOf(
-                        address(this)
-                    );
-                    uint256 received = assetBalanceAfter - assetBalanceBefore;
+                // If redeemUnderlying fails, calculate gToken amount and try redeem
+                uint256 gTokenAmount = (withdrawAmount * 1e18) / exchangeRate;
 
-                    IERC20(asset).transfer(msg.sender, received);
-                    return received;
+                try core.redeem(gToken, gTokenAmount) returns (uint256) {
+                    withdrawSuccess = true;
                 } catch {
-                    try IGToken(gToken).redeemUnderlying(amount) returns (
-                        uint256
-                    ) {
-                        uint256 assetBalanceAfter = IERC20(asset).balanceOf(
-                            address(this)
-                        );
-                        uint256 received = assetBalanceAfter -
-                            assetBalanceBefore;
-
-                        IERC20(asset).transfer(msg.sender, received);
-                        return received;
+                    try IGToken(gToken).redeem(gTokenAmount) returns (uint256) {
+                        withdrawSuccess = true;
                     } catch {
-                        revert("All withdrawal methods failed");
+                        // All withdrawal methods failed
+                        return 0;
                     }
                 }
             }
         }
+
+        // Calculate actual amount withdrawn
+        uint256 assetBalanceAfter = IERC20(asset).balanceOf(address(this));
+        uint256 actualWithdrawn = assetBalanceAfter - assetBalanceBefore;
+
+        // Update total principal
+        if (actualWithdrawn <= totalPrincipal[asset]) {
+            totalPrincipal[asset] -= actualWithdrawn;
+        } else {
+            totalPrincipal[asset] = 0;
+        }
+
+        // Transfer withdrawn asset to sender
+        IERC20(asset).transfer(msg.sender, actualWithdrawn);
+
+        // Log the withdrawal
+        console.log("LayerBank withdraw:", withdrawAmount);
+        console.log("Actually withdrawn:", actualWithdrawn);
+
+        return actualWithdrawn;
+    }
+
+    /**
+     * @dev Withdraw assets from LayerBank and send directly to user
+     * @param asset The address of the asset to withdraw
+     * @param amount The amount of the asset to withdraw (in underlying tokens)
+     * @param user The address to receive the withdrawn assets
+     * @return The actual amount of underlying tokens withdrawn
+     */
+    function withdrawToUser(
+        address asset,
+        uint256 amount,
+        address user
+    ) external override returns (uint256) {
+        require(supportedAssets[asset], "Asset not supported");
+        require(amount > 0, "Amount must be greater than 0");
+        require(user != address(0), "Invalid user address");
+
+        address gToken = gTokens[asset];
+        require(gToken != address(0), "gToken not found");
+
+        // Calculate the maximum amount that can be withdrawn
+        uint256 maxWithdrawal = totalPrincipal[asset];
+        uint256 withdrawAmount = (amount > maxWithdrawal)
+            ? maxWithdrawal
+            : amount;
+
+        // Get initial asset balance of the user
+        uint256 userBalanceBefore = IERC20(asset).balanceOf(user);
+
+        // Get current exchange rate
+        uint256 exchangeRate;
+        try IGToken(gToken).exchangeRate() returns (uint256 rate) {
+            exchangeRate = rate;
+        } catch {
+            exchangeRate = 1e18; // Default to 1:1 if we can't get the exchange rate
+        }
+
+        // Try withdrawing using redeemUnderlying first
+        bool withdrawSuccess = false;
+        try core.redeemUnderlying(gToken, withdrawAmount) returns (uint256) {
+            withdrawSuccess = true;
+        } catch {
+            // Try alternative methods
+            try IGToken(gToken).redeemUnderlying(withdrawAmount) returns (
+                uint256
+            ) {
+                withdrawSuccess = true;
+            } catch {
+                // If redeemUnderlying fails, calculate gToken amount and try redeem
+                uint256 gTokenAmount = (withdrawAmount * 1e18) / exchangeRate;
+
+                try core.redeem(gToken, gTokenAmount) returns (uint256) {
+                    withdrawSuccess = true;
+                } catch {
+                    try IGToken(gToken).redeem(gTokenAmount) returns (uint256) {
+                        withdrawSuccess = true;
+                    } catch {
+                        // All withdrawal methods failed
+                        return 0;
+                    }
+                }
+            }
+        }
+
+        // Get the balance that was withdrawn to this contract
+        uint256 adapterBalance = IERC20(asset).balanceOf(address(this));
+
+        // Transfer withdrawn asset to user
+        if (adapterBalance > 0) {
+            IERC20(asset).transfer(user, adapterBalance);
+        }
+
+        // Calculate actual amount received by user
+        uint256 userBalanceAfter = IERC20(asset).balanceOf(user);
+        uint256 actualReceived = userBalanceAfter - userBalanceBefore;
+
+        // Update total principal
+        if (actualReceived <= totalPrincipal[asset]) {
+            totalPrincipal[asset] -= actualReceived;
+        } else {
+            totalPrincipal[asset] = 0;
+        }
+
+        // Log the withdrawal
+        console.log("LayerBank withdrawToUser:", withdrawAmount);
+        console.log("Actually received by user:", actualReceived);
+
+        return actualReceived;
     }
 
     /**
@@ -373,13 +477,13 @@ contract LayerBankAdapter is IProtocolAdapter, Ownable {
         address gToken = gTokens[asset];
         require(gToken != address(0), "gToken not found");
 
-        // Get current gToken balance
+        // Step 1: Get current gToken balance
         uint256 gTokenBalance = IERC20(gToken).balanceOf(address(this));
         if (gTokenBalance == 0) {
             return 0; // Nothing to harvest
         }
 
-        // First try to update the exchange rate by calling accruedExchangeRate
+        // Step 2: Get current exchange rate
         uint256 currentExchangeRate;
         try IGToken(gToken).accruedExchangeRate() returns (uint256 rate) {
             currentExchangeRate = rate;
@@ -391,51 +495,80 @@ contract LayerBankAdapter is IProtocolAdapter, Ownable {
             }
         }
 
-        // Calculate the current value in underlying tokens
+        // Calculate current value in underlying tokens based on exchange rate
         uint256 currentValueInUnderlying = (gTokenBalance *
             currentExchangeRate) / 1e18;
 
-        // Calculate the original value at deposit time
-        uint256 originalDeposit = initialDeposits[asset];
-
-        // Calculate yield as the difference
+        // Calculate yield as the difference between current value and principal
         uint256 yieldAmount = 0;
-        if (currentValueInUnderlying > originalDeposit) {
-            yieldAmount = currentValueInUnderlying - originalDeposit;
+        if (currentValueInUnderlying > totalPrincipal[asset]) {
+            yieldAmount = currentValueInUnderlying - totalPrincipal[asset];
         }
 
-        // If there's yield, withdraw it
-        if (yieldAmount > 0) {
-            // Calculate what percentage of our tokens to withdraw
-            uint256 percentToWithdraw = (yieldAmount * 1e18) /
-                currentValueInUnderlying;
-            uint256 gTokensToWithdraw = (gTokenBalance * percentToWithdraw) /
-                1e18;
+        console.log("LayerBank harvest calculation:");
+        console.log("Current exchange rate:", currentExchangeRate);
+        console.log("gToken balance:", gTokenBalance);
+        console.log("Current value in underlying:", currentValueInUnderlying);
+        console.log("Total principal:", totalPrincipal[asset]);
+        console.log("Calculated yield amount:", yieldAmount);
 
-            if (gTokensToWithdraw > 0) {
-                uint256 assetBalanceBefore = IERC20(asset).balanceOf(
-                    address(this)
-                );
+        if (yieldAmount == 0) {
+            return 0; // No yield to harvest
+        }
 
-                // Try to withdraw just the yield portion
-                try core.redeem(gToken, gTokensToWithdraw) returns (uint256) {
-                    uint256 assetBalanceAfter = IERC20(asset).balanceOf(
-                        address(this)
-                    );
-                    uint256 actualWithdrawn = assetBalanceAfter -
-                        assetBalanceBefore;
+        // If there's yield to harvest, withdraw everything and redeposit
+        // This follows the pattern used in the AaveAdapter
 
-                    // Return the actual amount withdrawn as yield
-                    return actualWithdrawn;
-                } catch {
-                    // If redemption fails, we can still return the calculated amount
-                    // since we know interest is accruing based on the exchange rate
-                    return yieldAmount;
-                }
+        // Step 3: Withdraw all assets from LayerBank
+        uint256 initialAssetBalance = IERC20(asset).balanceOf(address(this));
+
+        // Try to redeem all gTokens
+        bool redeemSuccess = false;
+        try core.redeem(gToken, gTokenBalance) returns (uint256) {
+            redeemSuccess = true;
+        } catch {
+            try IGToken(gToken).redeem(gTokenBalance) returns (uint256) {
+                redeemSuccess = true;
+            } catch {
+                // If redemption fails, return the calculated yield
+                // This is still accurate as we know interest is accruing
+                return yieldAmount;
             }
         }
 
+        uint256 finalAssetBalance = IERC20(asset).balanceOf(address(this));
+        uint256 actualWithdrawn = finalAssetBalance - initialAssetBalance;
+
+        // Verify our yield calculation against actual withdrawal
+        console.log("Actually withdrawn:", actualWithdrawn);
+
+        // Step 5: Redeposit all assets back into LayerBank
+        IERC20(asset).approve(gToken, actualWithdrawn);
+
+        try core.supply(gToken, actualWithdrawn) {
+            // Success
+        } catch {
+            // If redeposit fails, at least we calculated the yield correctly
+        }
+
         return yieldAmount;
+    }
+
+    /**
+     * @dev Convert fees to rewards in the protocol
+     * @param asset The address of the asset
+     * @param fee The amount of fee to convert
+     */
+    function convertFeeToReward(address asset, uint256 fee) external override {
+        require(supportedAssets[asset], "Asset not supported");
+        require(fee > 0, "Fee must be greater than 0");
+        require(fee <= totalPrincipal[asset], "Fee exceeds total principal");
+
+        // Reduce the total principal to convert fee to yield
+        totalPrincipal[asset] -= fee;
+
+        console.log("Fee converted to reward:", fee);
+        console.log("Remaining principal:", totalPrincipal[asset]);
     }
 
     /**
@@ -540,6 +673,17 @@ contract LayerBankAdapter is IProtocolAdapter, Ownable {
         address asset
     ) external view override returns (bool) {
         return supportedAssets[asset];
+    }
+
+    /**
+     * @dev Get total principal amount for this asset
+     * @param asset The address of the asset
+     * @return The total principal amount
+     */
+    function getTotalPrincipal(
+        address asset
+    ) external view override returns (uint256) {
+        return totalPrincipal[asset];
     }
 
     /**

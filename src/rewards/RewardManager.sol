@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import "../vault/IVault.sol";
+import "../vault/interfaces/IVault.sol";
 import "forge-std/console.sol";
 
 contract RewardManager {

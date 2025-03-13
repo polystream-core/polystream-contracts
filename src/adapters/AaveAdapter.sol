@@ -5,6 +5,7 @@ import "./interfaces/IProtocolAdapter.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "forge-std/console.sol";
 
 // Simplified Aave interfaces
 interface IAavePoolMinimal {
@@ -115,6 +116,9 @@ contract AaveAdapter is IProtocolAdapter, Ownable {
     // Minimum reward amount to consider profitable after fees (per asset)
     mapping(address => uint256) public minRewardAmount;
 
+    // Add tracking for total principal per asset
+    mapping(address => uint256) public totalPrincipal;
+
     // WETH address for swap paths (for future reward token swaps)
     address public weth;
 
@@ -215,7 +219,7 @@ contract AaveAdapter is IProtocolAdapter, Ownable {
      * @dev Supply assets to Aave
      * @param asset The address of the asset to supply
      * @param amount The amount of the asset to supply
-     * @return The amount of aTokens received
+     * @return The amount of underlying tokens that were successfully supplied
      */
     function supply(
         address asset,
@@ -230,11 +234,20 @@ contract AaveAdapter is IProtocolAdapter, Ownable {
         // Get initial aToken balance
         uint256 balanceBefore = IERC20(aToken).balanceOf(address(this));
 
+        // Get initial underlying token balance to verify transfer
+        uint256 initialBalance = IERC20(asset).balanceOf(address(this));
+
         // Transfer asset from sender to this contract
         IERC20(asset).transferFrom(msg.sender, address(this), amount);
 
+        // Verify the transfer
+        uint256 receivedAmount = IERC20(asset).balanceOf(address(this)) - initialBalance;
+
         // Update initial deposit tracking
         initialDeposits[asset] += amount;
+
+        // Update total principal tracking
+        totalPrincipal[asset] += amount;
 
         // Approve Aave pool to spend asset
         IERC20(asset).approve(address(pool), amount);
@@ -242,9 +255,10 @@ contract AaveAdapter is IProtocolAdapter, Ownable {
         // Supply asset to Aave
         pool.supply(asset, amount, address(this), 0);
 
-        // Calculate aTokens received
-        uint256 balanceAfter = IERC20(aToken).balanceOf(address(this));
-        return balanceAfter - balanceBefore;
+        console.log("Aave supply: ", receivedAmount);
+
+        // return the underlying amount that was supplied
+        return receivedAmount;
     }
 
     /**
@@ -260,10 +274,95 @@ contract AaveAdapter is IProtocolAdapter, Ownable {
         require(supportedAssets[asset], "Asset not supported");
         require(amount > 0, "Amount must be greater than 0");
 
-        // Withdraw asset from Aave
-        uint256 withdrawn = pool.withdraw(asset, amount, msg.sender);
+        // Calculate max withdrawal amount (total principal)
+        uint256 maxWithdrawal = totalPrincipal[asset];
+        uint256 withdrawAmount = amount > maxWithdrawal ? maxWithdrawal : amount;
 
-        return withdrawn;
+        //get initial asset balance
+        uint256 assetBalanceBefore = IERC20(asset).balanceOf(address(this));
+
+        // Withdraw asset from Aave to this contract
+        uint256 withdrawn = pool.withdraw(asset, withdrawAmount, address(this));
+
+        // Verify the withdrawal - calculate actual amount received
+        uint256 assetBalanceAfter = IERC20(asset).balanceOf(address(this));
+        uint256 actualWithdrawn = assetBalanceAfter - assetBalanceBefore;
+
+        //Update total principal
+        if( actualWithdrawn <= totalPrincipal[asset]){
+            totalPrincipal[asset] -= actualWithdrawn;
+        } else {
+            totalPrincipal[asset] = 0;
+        }
+
+        //transfer withdrawn assets to sender
+        IERC20(asset).approve(address(pool), actualWithdrawn);
+        IERC20(asset).transfer(msg.sender, actualWithdrawn);
+
+        //Log the withdrawal
+        console.log("Aave withdrawal request: ", withdrawAmount);
+        console.log("Actually withdrawn: ", actualWithdrawn);
+
+
+        return actualWithdrawn;
+    }
+
+      /**
+     * @dev Withdraw assets from Aave and send directly to user
+     * @param asset The address of the asset to withdraw
+     * @param amount The amount of the asset to withdraw
+     * @param user The address to receive the withdrawn assets
+     * @return The actual amount withdrawn
+     */
+    function withdrawToUser(address asset, uint256 amount, address user) external override returns (uint256) {
+        require(supportedAssets[asset], "Asset not supported");
+        require(amount > 0, "Amount must be greater than 0");
+        require(user != address(0), "Invalid user address");
+
+        // Calculate the maximum amount that can be withdrawn
+        uint256 maxWithdrawal = totalPrincipal[asset];
+        uint256 withdrawAmount = amount > maxWithdrawal ? maxWithdrawal : amount;
+
+        // Get initial user balance
+        uint256 userBalanceBefore = IERC20(asset).balanceOf(user);
+
+        // Withdraw asset from Aave directly to the user
+        uint256 withdrawn = pool.withdraw(asset, withdrawAmount, user);
+        
+        // Verify the withdrawal - calculate actual amount received
+        uint256 userBalanceAfter = IERC20(asset).balanceOf(user);
+        uint256 actualReceived = userBalanceAfter - userBalanceBefore;
+
+        // Update total principal
+        if (actualReceived <= totalPrincipal[asset]) {
+            totalPrincipal[asset] -= actualReceived;
+        } else {
+            totalPrincipal[asset] = 0;
+        }
+
+        // Log the withdrawal
+        console.log("Aave withdrawal request: ", withdrawAmount);
+        console.log("Withdrawal to user: ", user);
+        console.log("Actually withdrawn by user: ", actualReceived);
+
+        return actualReceived;
+    }
+
+    /**
+     * @dev Convert fees to rewards in the protocol
+     * @param asset The address of the asset
+     * @param fee The amount of fee to convert
+     */
+    function convertFeeToReward(address asset, uint256 fee) external override {
+        require(supportedAssets[asset], "Asset not supported");
+        require(fee > 0, "Fee must be greater than 0");
+        require(fee <= totalPrincipal[asset], "Fee exceeds total principal");
+        
+        // Reduce the total principal to convert fee to yield
+        totalPrincipal[asset] -= fee;
+        
+        console.log("Fee converted to reward:", fee);
+        console.log("Remaining principal:", totalPrincipal[asset]);
     }
 
     /**
@@ -324,6 +423,15 @@ contract AaveAdapter is IProtocolAdapter, Ownable {
         lastHarvestTimestamp[asset] = block.timestamp;
 
         return yieldAmount;
+    }
+
+    /**
+     * @dev Get total principal amount for this asset
+     * @param asset The address of the asset
+     * @return The total principal amount
+     */
+    function getTotalPrincipal(address asset) external view override returns (uint256) {
+        return totalPrincipal[asset];
     }
 
     /**
