@@ -11,4 +11,6 @@ interface IRewardManager {
     function getUserRewardDebt(address user) external view returns (uint256);
     function getUserClaimedReward(address user) external view returns (uint256);
     function resetClaimedReward(address user) external;
+    function getUserRewardPerSharePaid(address user) external view returns (uint256);
+    function getPendingReward(address user) external view returns (uint256);
 }

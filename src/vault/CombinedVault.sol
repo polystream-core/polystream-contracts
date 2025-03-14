@@ -1,24 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "forge-std/console.sol";
 
-import "./interfaces/IVault.sol";
 import "../core/interfaces/IRegistry.sol";
-import "../rewards/IRewardManager.sol";
 import "../adapters/interfaces/IProtocolAdapter.sol";
+import "./interfaces/IVault.sol";
 
 /**
  * @title CombinedVault
- * @notice A yield-generating vault that combines registry integration with epoch-based rewards
- * @dev Implements elements from both YieldVault and Vault with consistent adapter handling
+ * @notice A yield-generating vault with improved time-weighted balance tracking
+ * @dev Implements simple accounting without ERC20 shares
  */
-contract CombinedVault is ERC20, IVault, Ownable, ReentrancyGuard {
+contract CombinedVault is IVault, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // Protocol registry
@@ -27,9 +25,6 @@ contract CombinedVault is ERC20, IVault, Ownable, ReentrancyGuard {
     // Underlying asset (e.g., USDC)
     IERC20 public immutable asset;
     
-    // Reward manager
-    IRewardManager public rewardManager;
-    
     // Protocol IDs
     uint256[] public activeProtocolIds;
     
@@ -37,63 +32,63 @@ contract CombinedVault is ERC20, IVault, Ownable, ReentrancyGuard {
     uint256 public constant EPOCH_DURATION = 86400;
     uint256 public lastEpochTime;
     
-    // Tracking total principal
-    uint256 public totalPrincipal;
+    // Tracking total balances
+    uint256 public totalUserBalance;
+    uint256 public totalAdapterBalance;
     
     // Fee constants
     uint256 public constant BASE_WITHDRAWAL_FEE = 0;     // 0%
-    uint256 public constant EARLY_WITHDRAWAL_FEE = 500;  // 5%
+    uint256 public constant EARLY_WITHDRAWAL_FEE = 500 ;  // 5%
     
     // Precision for calculations
     uint256 public constant PRECISION = 1e12;
+
+    struct UserDeposit {
+        uint256 amount;
+        uint256 timestamp;
+        uint256 epoch;
+        uint256 timeWeightedAmount; // This gets updated at harvest time
+    }
+
+    struct UserData {
+        uint256 balance;            // Total user balance (including rewards)
+        uint256 timeWeightedBalance; // Time-weighted balance used for reward calculation
+        UserDeposit[] deposits;     // Array of individual deposits
+        uint256 totalRewardsClaimed; // Total rewards claimed
+    }
     
     // User data tracking
-    mapping(address => uint256) public userEntryTime;
-    mapping(address => bool) public hasDepositedBefore;
-    mapping(uint256 => mapping(address => uint256)) public userEpochDeposits;
-    mapping(address => uint256) public userShares;
-    mapping(address => uint256) public timeWeightedShares;
+    mapping(address => UserData) public userData;
     address[] public activeUsers;
     
+    // Epoch data
+    mapping(uint256 => uint256) public epochHarvestedAmount;
+    uint256 public currentEpochNumber;
+    
     // Events
-    event Deposited(address indexed user, uint256 assetAmount, uint256 sharesAmount);
-    event Withdrawn(address indexed user, uint256 sharesAmount, uint256 assetAmount);
+    event Deposited(address indexed user, uint256 assetAmount, uint256 depositTimestamp);
+    event Withdrawn(address indexed user, uint256 amount);
     event Harvested(uint256 timestamp, uint256 harvestedAmount);
-    event RewardManagerSet(address indexed rewardManager);
     event ProtocolAdded(uint256 indexed protocolId);
     event ProtocolRemoved(uint256 indexed protocolId);
+    event RewardDistributed(address indexed user, uint256 rewardAmount);
     
     /**
      * @dev Constructor
      * @param _registry Address of the protocol registry
      * @param _asset Address of the underlying asset
-     * @param _name Name of the vault token
-     * @param _symbol Symbol of the vault token
      */
     constructor(
         address _registry,
-        address _asset,
-        string memory _name,
-        string memory _symbol
-    ) ERC20(_name, _symbol) Ownable(msg.sender) {
+        address _asset
+    ) Ownable(msg.sender) {
         require(_registry != address(0), "Invalid registry address");
         require(_asset != address(0), "Invalid asset address");
         
         registry = IRegistry(_registry);
         asset = IERC20(_asset);
         lastEpochTime = block.timestamp;
-    }
-    
-    /**
-     * @dev Set the reward manager
-     * @param _rewardManager Address of the reward manager
-     */
-    function setRewardManager(address _rewardManager) external onlyOwner {
-        require(address(rewardManager) == address(0), "RewardManager already set");
-        require(_rewardManager != address(0), "Invalid reward manager address");
-        
-        rewardManager = IRewardManager(_rewardManager);
-        emit RewardManagerSet(_rewardManager);
+        currentEpochNumber = block.timestamp / EPOCH_DURATION;
     }
     
     /**
@@ -155,158 +150,158 @@ contract CombinedVault is ERC20, IVault, Ownable, ReentrancyGuard {
         // Transfer assets from sender to this contract
         asset.transferFrom(msg.sender, address(this), amount);
         
-        // Mint shares to the user (1:1 initially)
-        uint256 sharesToMint = amount;
-        _mint(user, sharesToMint);
-        userShares[user] += amount;
-        totalPrincipal += amount;
-        
-        // Track user's deposit in current epoch
+        // Get current epoch
         uint256 currentEpoch = getCurrentEpoch();
-        userEpochDeposits[currentEpoch][user] += amount;
         
-        // Calculate time-weighted shares
+        // Calculate time-weighted amount based on time left in epoch
         uint256 elapsedTime = block.timestamp - lastEpochTime;
-        uint256 weightFactor = (elapsedTime * PRECISION) / EPOCH_DURATION;
+        uint256 timeRemainingFraction = EPOCH_DURATION - elapsedTime;
+        uint256 timeWeightedAmount = (amount * timeRemainingFraction) / EPOCH_DURATION;
+        
+        // Add new deposit to user's deposits array
+        userData[user].deposits.push(UserDeposit({
+            amount: amount,
+            timestamp: block.timestamp,
+            epoch: currentEpoch,
+            timeWeightedAmount: timeWeightedAmount
+        }));
+        
+        // Update user's total balance
+        userData[user].balance += amount;
+        
+        // Update time-weighted balance
+        userData[user].timeWeightedBalance += timeWeightedAmount;
+        
+        // Update total balances
+        totalUserBalance += amount;
+        totalAdapterBalance += amount; // Will be updated when distributed to protocols
+        
+        console.log("User deposited:", amount);
+        console.log("Time-weighted amount:", timeWeightedAmount);
         
         // First-time depositor logic
-        if (!hasDepositedBefore[user]) {
-            hasDepositedBefore[user] = true;
+        if (userData[user].deposits.length == 1) {
             activeUsers.push(user);
         }
-
-        // Set time-weighted shares
-        if (totalSupply() == amount) {
-            // First depositor to the vault gets full weight
-            timeWeightedShares[user] = amount;
-            console.log("First depositor detected, full weight assigned");
-        } else if (userShares[user] == amount) {
-            // First deposit for this user (but not first in vault)
-            timeWeightedShares[user] = (amount * weightFactor) / PRECISION;
-            console.log("New user deposit, partial weight based on time:", timeWeightedShares[user]);
-        } else {
-            // Additional deposit from existing user
-            timeWeightedShares[user] += (amount * weightFactor) / PRECISION;
-            console.log("Additional deposit, weight added:", (amount * weightFactor) / PRECISION);
-        }
-        
-        // Set user entry time
-        userEntryTime[user] = block.timestamp;
         
         // Distribute funds to protocols
         _distributeAssets();
         
-        // Update reward debt if reward manager is set
-        if (address(rewardManager) != address(0)) {
-            rewardManager.updateUserRewardDebt(user);
-        }
-        
-        console.log("User deposited:", amount);
-        console.log("User time-weighted shares:", timeWeightedShares[user]);
-        
-        emit Deposited(user, amount, sharesToMint);
+        emit Deposited(user, amount, block.timestamp);
     }
     
     /**
      * @dev Withdraw assets from the vault
      * @param user Address of the user to withdraw for
-     * @param shareAmount Amount of shares to withdraw
+     * @param amount Amount to withdraw
      */
-    function withdraw(address user, uint256 shareAmount) external override nonReentrant {
+    function withdraw(address user, uint256 amount) external override nonReentrant {
         require(user != address(0), "Invalid user");
-        require(shareAmount > 0, "Withdraw amount must be > 0");
-        require(userShares[user] >= shareAmount, "Insufficient shares");
-        
-        // Claim any pending rewards first
-        if (address(rewardManager) != address(0)) {
-            _claimReward(user);
-        }
+        require(amount > 0, "Withdraw amount must be > 0");
+        require(userData[user].balance >= amount, "Insufficient balance");
         
         // Calculate early withdrawal fee if applicable
         uint256 currentEpoch = getCurrentEpoch();
-        uint256 penaltyFee = BASE_WITHDRAWAL_FEE;
-        uint256 currentEpochDeposit = userEpochDeposits[currentEpoch][user];
+        uint256 feeAmount = 0;
         
-        // Only apply early withdrawal fee to deposits made in the current epoch
-        uint256 fee = 0;
-        if (currentEpochDeposit > 0) {
-            if (shareAmount <= currentEpochDeposit) {
-                // Withdrawing only current epoch deposits
-                fee = (shareAmount * EARLY_WITHDRAWAL_FEE) / 10000;
-            } else {
-                // Withdrawing current epoch deposits plus older deposits
-                fee = (currentEpochDeposit * EARLY_WITHDRAWAL_FEE) / 10000;
+        // Check for current epoch deposits to apply early withdrawal fee
+        uint256 currentEpochDepositTotal = 0;
+        for (uint i = 0; i < userData[user].deposits.length; i++) {
+            if (userData[user].deposits[i].epoch == currentEpoch) {
+                currentEpochDepositTotal += userData[user].deposits[i].amount;
             }
         }
         
-        // Calculate final withdrawal amount
-        uint256 finalWithdrawAmount = shareAmount - fee;
+        if (currentEpochDepositTotal > 0) {
+            uint256 earlyWithdrawalAmount = amount <= currentEpochDepositTotal ? 
+                                           amount : currentEpochDepositTotal;
+            feeAmount = (earlyWithdrawalAmount * EARLY_WITHDRAWAL_FEE) / 10000;
+        }
         
-        console.log("Withdraw request:", shareAmount);
-        console.log("Current epoch deposit:", currentEpochDeposit);
-        console.log("Fee deducted:", fee);
+        // Calculate final withdrawal amount
+        uint256 finalWithdrawAmount = amount - feeAmount;
+        
+        console.log("Withdraw request:", amount);
+        console.log("Current epoch deposit:", currentEpochDepositTotal);
+        console.log("Fee deducted:", feeAmount);
         console.log("Final withdraw amount:", finalWithdrawAmount);
         
         // Convert fee to reward if applicable
-        if (fee > 0) {
-            _convertFeeToReward(fee);
+        if (feeAmount > 0) {
+            _convertFeeToReward(feeAmount);
         }
         
         // Withdraw funds from protocols
         uint256 actualWithdrawnAmount = _withdrawFromProtocols(finalWithdrawAmount, user);
         
-        // Update user accounting
-        userShares[user] -= shareAmount;
-        totalPrincipal -= shareAmount;
+        // Update accounting
+        userData[user].balance -= amount;
         
-        // Reduce time-weighted shares proportionally
-        if (userShares[user] > 0) {
-            timeWeightedShares[user] = (timeWeightedShares[user] * userShares[user]) / (userShares[user] + shareAmount);
+        // Update time-weighted balance proportionally
+        if (userData[user].balance > 0) {
+            userData[user].timeWeightedBalance = (userData[user].timeWeightedBalance * userData[user].balance) / (userData[user].balance + amount);
         } else {
-            timeWeightedShares[user] = 0;
-        }
-        
-        // Burn shares
-        _burn(user, shareAmount);
-        
-        // Update reward debt
-        if (address(rewardManager) != address(0)) {
-            rewardManager.updateUserRewardDebt(user);
-        }
-        
-        // Remove user from tracking if no shares left
-        if (userShares[user] == 0) {
+            userData[user].timeWeightedBalance = 0;
+            
+            // If balance is zero, remove user from tracking
             _removeUser(user);
         }
         
-        emit Withdrawn(user, shareAmount, actualWithdrawnAmount);
+        // Update total balances
+        totalUserBalance -= amount;
+        totalAdapterBalance -= finalWithdrawAmount;
+        
+        emit Withdrawn(user, actualWithdrawnAmount);
     }
     
     /**
      * @dev Check and harvest yield from all protocols
      */
-    function checkAndHarvest() external override nonReentrant {
+    function checkAndHarvest() external override nonReentrant returns (uint256 harvestedAmount) {
         if (block.timestamp >= lastEpochTime + EPOCH_DURATION) {
+            console.log("test arithmetic overflow");
             uint256 totalHarvested = _harvestAllProtocols();
+            epochHarvestedAmount[currentEpochNumber] = totalHarvested;
             
-            // Update reward state if reward manager is set
-            if (address(rewardManager) != address(0) && totalHarvested > 0) {
-                rewardManager.updateRewardState(totalHarvested);
-                
-                // Update reward debt for all users
+            // Get total time-weighted balance across all users
+            uint256 totalTimeWeightedBalance = 0;
+            for (uint256 i = 0; i < activeUsers.length; i++) {
+                address user = activeUsers[i];
+                totalTimeWeightedBalance += userData[user].timeWeightedBalance;
+            }
+            
+            // Distribute rewards to users based on time-weighted balance
+            if (totalTimeWeightedBalance > 0 && totalHarvested > 0) {
                 for (uint256 i = 0; i < activeUsers.length; i++) {
                     address user = activeUsers[i];
-                    rewardManager.updateUserRewardDebt(user);
+                    uint256 userShare = userData[user].timeWeightedBalance;
+                    
+                    if (userShare > 0) {
+                        // Calculate user's reward
+                        uint256 userReward = (totalHarvested * userShare) / totalTimeWeightedBalance;
+                        
+                        // Add reward to user's balance
+                        userData[user].balance += userReward;
+                        
+                        // Update total user balance
+                        totalUserBalance += userReward;
+                        
+                        console.log("Distributed to user", user, ":", userReward);
+                        
+                        emit RewardDistributed(user, userReward);
+                    }
                 }
             }
             
-            // Update epoch
-            lastEpochTime = block.timestamp;
+            // Reset time-weighted balances for the new epoch
+            _resetTimeWeightedBalances();
             
-            // Normalize time-weighted shares (reset for new epoch)
-            _normalizeUserWeights();
+            // Update epoch tracking
+            lastEpochTime = block.timestamp;
+            currentEpochNumber = getCurrentEpoch();
             
             emit Harvested(block.timestamp, totalHarvested);
+            return harvestedAmount;
         }
     }
     
@@ -327,45 +322,53 @@ contract CombinedVault is ERC20, IVault, Ownable, ReentrancyGuard {
     }
     
     /**
-     * @dev Get user entry time
+     * @dev Get user entry time (time of first deposit)
      * @param user Address of the user
      * @return Entry time of the user
      */
     function getUserEntryTime(address user) external view override returns (uint256) {
-        return userEntryTime[user];
+        if (userData[user].deposits.length > 0) {
+            return userData[user].deposits[0].timestamp;
+        }
+        return 0;
     }
     
     /**
-     * @dev Get total supply of shares
+     * @dev Get total supply of user balances
      * @return Total supply
      */
-    function getTotalSupply() external view override returns (uint256) {
-        return totalSupply();
+    function getTotalSupply() public view override returns (uint256) {
+        return totalUserBalance;
     }
     
-    function getTotalTimeWeightedShares() external view override returns (uint256 total) {
+    /**
+     * @dev Get total time-weighted balances across all users
+     * @return Total time-weighted balance
+     */
+    function getTotalTimeWeightedShares() external view override returns (uint256) {
+        uint256 total = 0;
         for (uint256 i = 0; i < activeUsers.length; i++) {
-            total += timeWeightedShares[activeUsers[i]];
+            total += userData[activeUsers[i]].timeWeightedBalance;
         }
         return total;
     }
     
     /**
-     * @dev Get user time-weighted shares
+     * @dev Get user time-weighted balance
      * @param user Address of the user
-     * @return User's time-weighted shares
+     * @return User's time-weighted balance
      */
     function getUserTimeWeightedShares(address user) external view override returns (uint256) {
-        return timeWeightedShares[user];
+        return userData[user].timeWeightedBalance;
     }
     
     /**
-     * @dev Override balanceOf to match interface requirements
+     * @dev Get user balance 
      * @param account Address of the account
      * @return Balance of the account
      */
-    function balanceOf(address account) public view override(ERC20, IVault) returns (uint256) {
-        return super.balanceOf(account);
+    function balanceOf(address account) public view override returns (uint256) {
+        return userData[account].balance;
     }
     
     /**
@@ -448,58 +451,62 @@ contract CombinedVault is ERC20, IVault, Ownable, ReentrancyGuard {
         }
     }
 
+    /**
+     * @dev Internal function to harvest yield from all protocols
+     * @return totalHarvested The total amount harvested from all protocols
+     */
     function _harvestAllProtocols() internal returns (uint256 totalHarvested) {
+        // Reset adapter balance for recalculation
+        totalAdapterBalance = 0;
+        
+        console.log("Starting harvest from all protocols");
+        
         for (uint i = 0; i < activeProtocolIds.length; i++) {
             uint256 protocolId = activeProtocolIds[i];
             IProtocolAdapter adapter = registry.getAdapter(protocolId, address(asset));
             
-            try adapter.harvest(address(asset)) returns (uint256 harvested) {
+            // Attempt to harvest
+            uint256 harvested = adapter.harvest(address(asset));
+            if (harvested > 0) {
                 totalHarvested += harvested;
                 console.log("Harvested from protocol", protocolId, ":", harvested);
-            } catch {
-                // Skip if harvest fails for a protocol
+            } else {
                 console.log("Harvest failed for protocol", protocolId);
-                continue;
             }
+            
+            // Update adapter balance
+            uint256 postHarvestBalance = adapter.getBalance(address(asset));
+            totalAdapterBalance += postHarvestBalance;
+            console.log("Protocol", protocolId, "post-harvest balance:", postHarvestBalance);
         }
         
         console.log("Total harvested:", totalHarvested);
+        console.log("Updated total adapter balance:", totalAdapterBalance);
+        
         return totalHarvested;
     }
     
     /**
-     * @dev Internal function to claim rewards for a user
-     * @param user Address of the user
+     * @dev Internal function to reset time-weighted balances for the new epoch
+     * Each user's time-weighted balance is set to their actual balance
      */
-    function _claimReward(address user) internal {
-        if (address(rewardManager) == address(0)) return;
+    function _resetTimeWeightedBalances() internal {
+        console.log("Resetting time-weighted balances for new epoch");
         
-        uint256 userRewardDebt = rewardManager.getUserRewardDebt(user);
-        uint256 totalAccumulatedReward = (userShares[user] * rewardManager.getAccRewardPerShare()) / PRECISION;
-        
-        uint256 pending = totalAccumulatedReward > userRewardDebt ? totalAccumulatedReward - userRewardDebt : 0;
-        if (pending == 0) return;
-        
-        // Check if we have enough balance to pay rewards
-        uint256 protocolsBalance = 0;
-        for (uint i = 0; i < activeProtocolIds.length; i++) {
-            uint256 protocolId = activeProtocolIds[i];
-            IProtocolAdapter adapter = registry.getAdapter(protocolId, address(asset));
-            protocolsBalance += adapter.getBalance(address(asset));
+        for (uint256 i = 0; i < activeUsers.length; i++) {
+            address user = activeUsers[i];
+            
+            // Reset time-weighted amount for each deposit to its actual amount
+            for (uint j = 0; j < userData[user].deposits.length; j++) {
+                userData[user].deposits[j].timeWeightedAmount = userData[user].deposits[j].amount;
+            }
+            
+            // Reset user's time-weighted balance to match their actual balance
+            userData[user].timeWeightedBalance = userData[user].balance;
+            
+            console.log("User", user, "balance:", userData[user].balance);
+            console.log("Reset time-weighted balance for user", user, "to", userData[user].balance);
         }
-        
-        require(protocolsBalance >= pending, "Insufficient balance for rewards");
-        
-        // Withdraw from protocols to pay rewards
-        uint256 actualWithdrawn = _withdrawFromProtocols(pending, user);
-        
-        // Record claimed reward (use actual amount withdrawn)
-        rewardManager.recordClaimedReward(user, actualWithdrawn);
-        
-        // Update reward debt
-        rewardManager.updateUserRewardDebt(user);
-        
-        console.log("Rewards claimed by user", user, ":", actualWithdrawn);
     }
     
     /**
@@ -511,51 +518,8 @@ contract CombinedVault is ERC20, IVault, Ownable, ReentrancyGuard {
             if (activeUsers[i] == user) {
                 activeUsers[i] = activeUsers[activeUsers.length - 1];
                 activeUsers.pop();
-                delete userEntryTime[user];
-                delete timeWeightedShares[user];
-                
-                if (address(rewardManager) != address(0)) {
-                    rewardManager.resetClaimedReward(user);
-                }
-                
+                delete userData[user];
                 break;
-            }
-        }
-    }
-    
-    /**
-     * @dev Internal function to normalize time weights for all users
-     * We're using a hybrid approach that maintains some historical advantage
-     * while also respecting the original test expectations
-     */
-    function _normalizeUserWeights() internal {
-        // First, calculate rewards that have accrued in this epoch
-        uint256 totalRewards = 0;
-        for (uint i = 0; i < activeProtocolIds.length; i++) {
-            uint256 protocolId = activeProtocolIds[i];
-            IProtocolAdapter adapter = registry.getAdapter(protocolId, address(asset));
-            
-            // We don't actually withdraw these rewards, just calculate them
-            try adapter.getEstimatedInterest(address(asset)) returns (uint256 interest) {
-                totalRewards += interest;
-            } catch {
-                // If getEstimatedInterest fails, ignore
-            }
-        }
-        
-        // For each user, simply set their time-weighted shares to their current shares
-        // This matches the original test expectations while still properly accounting
-        // for compounding effects in the share values themselves
-        for (uint256 i = 0; i < activeUsers.length; i++) {
-            address user = activeUsers[i];
-            uint256 userShare = balanceOf(user);
-            
-            if (userShare > 0) {
-                // Set time-weighted shares to actual shares
-                // This aligns with original test expectations
-                timeWeightedShares[user] = userShare;
-                
-                console.log("Normalized weights for user", user, "to", timeWeightedShares[user]);
             }
         }
     }

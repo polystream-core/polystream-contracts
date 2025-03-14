@@ -32,14 +32,14 @@ contract YieldToken is ERC20, ERC20Burnable, Ownable {
     /**
      * @dev Constructor
      * @param _asset The address of the underlying asset (USDC)
-     * @param name The name of the token (e.g., "Protected Yield USDC")
-     * @param symbol The symbol of the token (e.g., "pyUSDC")
+     * @param _name The name of the token (e.g., "Protected Yield USDC")
+     * @param _symbol The symbol of the token (e.g., "pyUSDC")
      */
     constructor(
         address _asset,
-        string memory name,
-        string memory symbol
-    ) ERC20(name, symbol) Ownable(msg.sender) {
+        string memory _name,
+        string memory _symbol
+    ) ERC20(_name, _symbol) Ownable(msg.sender) {
         require(_asset != address(0), "Invalid asset address");
         asset = IERC20(_asset);
     }

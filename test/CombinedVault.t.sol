@@ -6,7 +6,6 @@ import "forge-std/console.sol";
 import "../src/vault/CombinedVault.sol";
 import "../src/core/ProtocolRegistry.sol";
 import "../src/adapters/AaveAdapter.sol";
-import "../src/rewards/RewardManager.sol";
 import "../src/libraries/Constants.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -25,7 +24,6 @@ contract CombinedVaultTest is Test {
     ProtocolRegistry public registry;
     AaveAdapter public aaveAdapter;
     CombinedVault public vault;
-    RewardManager public rewardManager;
     
     // Token
     IERC20 public usdc;
@@ -42,7 +40,9 @@ contract CombinedVaultTest is Test {
         // Give test users some USDC
         deal(USDC_ADDRESS, user1, 1000 * 1e6);
         deal(USDC_ADDRESS, user2, 1000 * 1e6);
-        
+        console.log("User 1 USDC balance:", IERC20(USDC_ADDRESS).balanceOf(user1));
+        console.log("User 2 USDC balance:", IERC20(USDC_ADDRESS).balanceOf(user2));
+
         // Set up as admin for all deployments and admin operations
         vm.startPrank(admin);
         
@@ -64,19 +64,11 @@ contract CombinedVaultTest is Test {
         // Deploy vault
         vault = new CombinedVault(
             address(registry),
-            USDC_ADDRESS,
-            "Yield Vault USDC",
-            "yvUSDC"
+            USDC_ADDRESS
         );
         
         // Add Aave protocol to vault
         vault.addProtocol(Constants.AAVE_PROTOCOL_ID);
-        
-        // Deploy reward manager
-        rewardManager = new RewardManager(USDC_ADDRESS, address(vault));
-        
-        // Set reward manager in vault
-        vault.setRewardManager(address(rewardManager));
         
         vm.stopPrank();
         
@@ -84,30 +76,221 @@ contract CombinedVaultTest is Test {
         usdc = IERC20(USDC_ADDRESS);
     }
     
-    function testDepositAndTimeWeightedShares() public {
-        // User 1 deposits first
-        uint256 depositAmount1 = 100 * 1e6; // 100 USDC
+    function testSingleUserDepositWithdraw() public {
+        // User 1 deposits
+        uint256 depositAmount = 100 * 1e6; // 100 USDC
+        
+        vm.startPrank(user1);
+        usdc.approve(address(vault), depositAmount);
+        vault.deposit(user1, depositAmount);
+        
+        // Verify deposit was successful
+        assertEq(vault.balanceOf(user1), depositAmount, "User balance should match deposit amount");
+        assertEq(vault.getUserTimeWeightedShares(user1), depositAmount, "Time-weighted shares should match deposit for first deposit");
+        
+        // Withdraw full amount
+        uint256 initialBalance = usdc.balanceOf(user1);
+        vault.withdraw(user1, depositAmount);
+        vm.stopPrank();
+        
+        // Verify withdrawal
+        uint256 finalBalance = usdc.balanceOf(user1);
+        assertEq(vault.balanceOf(user1), 0, "User balance should be zero after full withdrawal");
+        
+        console.log("Single user deposit and withdraw test passed");
+    }
+    
+    function testSingleUserLateWithdraw() public {
+        // User 1 deposits
+        uint256 depositAmount = 100 * 1e6; // 100 USDC
+        
+        vm.startPrank(user1);
+        usdc.approve(address(vault), depositAmount);
+        vault.deposit(user1, depositAmount);
+        vm.stopPrank();
+        
+        // Fast forward past the epoch
+        console.log("Fast-forwarding past the epoch...");
+        vm.warp(block.timestamp + vault.EPOCH_DURATION());
+        
+        // Execute checkAndHarvest to transition epoch
+        vm.prank(admin);
+        uint256 harvestedYield = vault.checkAndHarvest();
+        console.log("Harvested yield:", harvestedYield);
+        
+        // Calculate expected total with yield
+        uint256 expectedTotal = depositAmount + harvestedYield;
+        
+        // Now withdraw in the new epoch (should have no early withdrawal fee)
+        uint256 withdrawAmount = expectedTotal;
+        
+        // Get initial balance before withdrawal
+        uint256 initialBalance = usdc.balanceOf(user1);
+        
+        vm.prank(user1);
+        vault.withdraw(user1, withdrawAmount);
+        
+        // Check final balance
+        uint256 finalBalance = usdc.balanceOf(user1);
+        console.log("Initial balance:", initialBalance);
+        console.log("Final balance:", finalBalance);
+        console.log("Difference:", finalBalance - initialBalance);
+        
+        // Should be close to the withdraw amount (no fee) plus any accrued yield
+        assertApproxEqRel(finalBalance - initialBalance, withdrawAmount, 0.01e18, "User should receive deposit plus yield");
+        
+        console.log("Single user late withdraw test passed");
+    }
+    
+    function testTwoUsersSameEpoch() public {
+        // User 1 and User 2 deposit in the same epoch
+        uint256 depositAmount1 = 200 * 1e6; // 200 USDC
+        uint256 depositAmount2 = 300 * 1e6; // 300 USDC
         
         vm.startPrank(user1);
         usdc.approve(address(vault), depositAmount1);
         vault.deposit(user1, depositAmount1);
         vm.stopPrank();
         
+        vm.startPrank(user2);
+        usdc.approve(address(vault), depositAmount2);
+        vault.deposit(user2, depositAmount2);
+        vm.stopPrank();
+        
         console.log("User 1 deposited:", depositAmount1);
+        console.log("User 2 deposited:", depositAmount2);
         
-        // Check initial time-weighted shares (first depositor gets full weight)
-        uint256 user1Shares = vault.userShares(user1);
-        uint256 user1TimeWeighted = vault.getUserTimeWeightedShares(user1);
+        // Verify both users have correct balances
+        assertEq(vault.balanceOf(user1), depositAmount1, "User 1 balance incorrect");
+        assertEq(vault.balanceOf(user2), depositAmount2, "User 2 balance incorrect");
         
-        console.log("User 1 shares:", user1Shares);
-        console.log("User 1 time-weighted shares:", user1TimeWeighted);
+        // Both deposits were made in the same epoch at the same time,
+        // so time-weighted balances should match actual balances
+        assertEq(vault.getUserTimeWeightedShares(user1), depositAmount1, "User 1 time-weighted shares incorrect");
+        assertEq(vault.getUserTimeWeightedShares(user2), depositAmount2, "User 2 time-weighted shares incorrect");
         
-        assertEq(user1TimeWeighted, user1Shares, "First depositor should get full weight");
+        // Fast forward to the end of the epoch
+        vm.warp(block.timestamp + vault.EPOCH_DURATION());
         
-        // Advance time partially through the epoch
-        vm.warp(block.timestamp + vault.EPOCH_DURATION() / 2);
+        // Harvest the yield
+        vm.prank(admin);
+        uint256 yieldAmount = vault.checkAndHarvest();
+        console.log("Harvested yield:", yieldAmount);
         
-        // User 2 deposits in the middle of the epoch
+        // Expected rewards based on proportional deposits
+        uint256 totalDeposits = depositAmount1 + depositAmount2;
+        uint256 expectedReward1 = (yieldAmount * depositAmount1) / totalDeposits;
+        uint256 expectedReward2 = (yieldAmount * depositAmount2) / totalDeposits;
+        
+        console.log("Expected reward for User 1:", expectedReward1);
+        console.log("Expected reward for User 2:", expectedReward2);
+        
+        // Check balances after rewards
+        uint256 balanceAfter1 = vault.balanceOf(user1);
+        uint256 balanceAfter2 = vault.balanceOf(user2);
+        
+        console.log("User 1 balance after rewards:", balanceAfter1);
+        console.log("User 2 balance after rewards:", balanceAfter2);
+        
+        // Verify rewards were distributed correctly
+        assertApproxEqRel(balanceAfter1, depositAmount1 + expectedReward1, 0.01e18, "User 1 reward incorrect");
+        assertApproxEqRel(balanceAfter2, depositAmount2 + expectedReward2, 0.01e18, "User 2 reward incorrect");
+        
+        console.log("Two users same epoch test passed");
+    }
+    
+    function testTwoUsersSameEpochDifferentTime() public {
+        // User 1 deposits at the start of the epoch
+        uint256 depositAmount1 = 200 * 1e6; // 200 USDC
+        
+        vm.startPrank(user1);
+        usdc.approve(address(vault), depositAmount1);
+        vault.deposit(user1, depositAmount1);
+        vm.stopPrank();
+        
+        console.log("User 1 deposited at epoch start:", depositAmount1);
+        console.log("User 1 time-weighted initial:", vault.getUserTimeWeightedShares(user1));
+        
+        // Advance time to 60% through the epoch
+        vm.warp(block.timestamp + (vault.EPOCH_DURATION() * 60) / 100);
+        
+        // User 2 deposits when 60% of the epoch has passed (only 40% time remaining)
+        uint256 depositAmount2 = 500 * 1e6; // 500 USDC (larger amount)
+        
+        vm.startPrank(user2);
+        usdc.approve(address(vault), depositAmount2);
+        vault.deposit(user2, depositAmount2);
+        vm.stopPrank();
+        
+        console.log("User 2 deposited at 60% of epoch:", depositAmount2);
+        
+        // User 2's time-weighted amount should be proportional to time remaining in epoch
+        uint256 expectedTimeWeighted2 = (depositAmount2 * 40) / 100; // 40% of the deposit
+        uint256 actualTimeWeighted2 = vault.getUserTimeWeightedShares(user2);
+        
+        console.log("User 2 expected time-weighted:", expectedTimeWeighted2);
+        console.log("User 2 actual time-weighted:", actualTimeWeighted2);
+        
+        assertApproxEqRel(actualTimeWeighted2, expectedTimeWeighted2, 0.01e18, "User 2 time-weighted incorrect");
+        
+        // Fast forward to the end of the epoch
+        vm.warp(block.timestamp + vault.EPOCH_DURATION() * 40 / 100);
+        
+        // Harvest the yield
+        vm.prank(admin);
+        uint256 yieldAmount = vault.checkAndHarvest();
+        console.log("Harvested yield:", yieldAmount);
+        
+        // Expected rewards based on time-weighted deposits
+        uint256 user1TimeWeighted = depositAmount1; // Full weight for first depositor
+        uint256 totalTimeWeighted = user1TimeWeighted + expectedTimeWeighted2;
+        uint256 expectedReward1 = (yieldAmount * user1TimeWeighted) / totalTimeWeighted;
+        uint256 expectedReward2 = (yieldAmount * expectedTimeWeighted2) / totalTimeWeighted;
+        
+        console.log("Total time-weighted:", totalTimeWeighted);
+        console.log("Expected reward for User 1:", expectedReward1);
+        console.log("Expected reward for User 2:", expectedReward2);
+        
+        // Check balances after rewards
+        uint256 balanceAfter1 = vault.balanceOf(user1);
+        uint256 balanceAfter2 = vault.balanceOf(user2);
+        
+        console.log("User 1 balance after rewards:", balanceAfter1);
+        console.log("User 2 balance after rewards:", balanceAfter2);
+        
+        // Verify rewards were distributed correctly based on time-weighting
+        assertApproxEqRel(balanceAfter1, depositAmount1 + expectedReward1, 0.02e18, "User 1 reward incorrect");
+        assertApproxEqRel(balanceAfter2, depositAmount2 + expectedReward2, 0.02e18, "User 2 reward incorrect");
+        
+        console.log("Two users same epoch different time test passed");
+    }
+    
+    function testTwoUsersDifferentEpoch() public {
+        // User 1 deposits in first epoch
+        uint256 depositAmount1 = 100 * 1e6; // 100 USDC
+        
+        console.log("=== EPOCH 0 ===");
+        vm.startPrank(user1);
+        usdc.approve(address(vault), depositAmount1);
+        vault.deposit(user1, depositAmount1);
+        vm.stopPrank();
+        
+        console.log("User 1 deposited in epoch 0:", depositAmount1);
+        
+        // Fast forward to epoch 200
+        vm.warp(block.timestamp + vault.EPOCH_DURATION() * 200);
+        console.log("=== EPOCH 200 ===");
+        
+        // Harvest at end of epoch 200
+        vm.prank(admin);
+        uint256 accrued1 = vault.checkAndHarvest();
+        console.log("Harvested after 200 epochs:", accrued1);
+        
+        // Check user1 balance after 200 epochs of yield
+        uint256 balanceAfter200 = vault.balanceOf(user1);
+        console.log("User 1 balance after 200 epochs:", balanceAfter200);
+        
+        // User 2 deposits in epoch 200
         uint256 depositAmount2 = 200 * 1e6; // 200 USDC
         
         vm.startPrank(user2);
@@ -115,35 +298,60 @@ contract CombinedVaultTest is Test {
         vault.deposit(user2, depositAmount2);
         vm.stopPrank();
         
-        console.log("User 2 deposited:", depositAmount2);
+        console.log("User 2 deposited in epoch 200:", depositAmount2);
         
-        // Check time-weighted shares (second depositor gets partial weight)
-        uint256 user2Shares = vault.userShares(user2);
-        uint256 user2TimeWeighted = vault.getUserTimeWeightedShares(user2);
+        // Fast forward to epoch 300
+        vm.warp(block.timestamp + vault.EPOCH_DURATION() * 100);
+        console.log("=== EPOCH 300 ===");
         
-        console.log("User 2 shares:", user2Shares);
-        console.log("User 2 time-weighted shares:", user2TimeWeighted);
-        
-        // Mid-epoch depositor should have time-weighted shares less than actual shares
-        assertLt(user2TimeWeighted, user2Shares, "Mid-epoch depositor should have partial weight");
-        
-        // Complete the epoch and check and harvest
-        vm.warp(block.timestamp + vault.EPOCH_DURATION() / 2);
-        
+        // Harvest at end of epoch 300
         vm.prank(admin);
-        vault.checkAndHarvest();
+        uint256 accrued2 = vault.checkAndHarvest();
+        console.log("Harvested after epochs 200-300:", accrued2);
         
-        // After epoch transition, time-weighted shares may include yield
-        // Update test to allow for small variations due to yield
-        uint256 user1TimeWeightedAfter = vault.getUserTimeWeightedShares(user1);
-        uint256 user2TimeWeightedAfter = vault.getUserTimeWeightedShares(user2);
+        // Expected rewards for epoch 200-300 based on proportional deposits
+        uint256 userBalance1 = balanceAfter200;
+        uint256 userBalance2 = depositAmount2;
+        uint256 totalBalance = userBalance1 + userBalance2;
         
-        console.log("User 1 time-weighted shares after epoch:", user1TimeWeightedAfter);
-        console.log("User 2 time-weighted shares after epoch:", user2TimeWeightedAfter);
+        uint256 expectedReward1 = (accrued2 * userBalance1) / totalBalance;
+        uint256 expectedReward2 = (accrued2 * userBalance2) / totalBalance;
         
-        // Allow for a small yield buffer (up to 1% difference)
-        assertApproxEqRel(user1TimeWeightedAfter, user1Shares, 0.01e18, "Time-weighted shares should be close to actual shares after normalization");
-        assertApproxEqRel(user2TimeWeightedAfter, user2Shares, 0.01e18, "Time-weighted shares should be close to actual shares after normalization");
+        console.log("User 1 expected reward for epochs 200-300:", expectedReward1);
+        console.log("User 2 expected reward for epochs 200-300:", expectedReward2);
+        
+        // Check balances after rewards
+        uint256 balanceAfter300_1 = vault.balanceOf(user1);
+        uint256 balanceAfter300_2 = vault.balanceOf(user2);
+        
+        console.log("User 1 balance after 300 epochs:", balanceAfter300_1);
+        console.log("User 2 balance after 300 epochs:", balanceAfter300_2);
+        
+        // Verify rewards were distributed correctly
+        assertApproxEqRel(balanceAfter300_1, userBalance1 + expectedReward1, 0.01e18, "User 1 reward incorrect");
+        assertApproxEqRel(balanceAfter300_2, userBalance2 + expectedReward2, 0.01e18, "User 2 reward incorrect");
+        
+        // Fast forward to epoch 500
+        vm.warp(block.timestamp + vault.EPOCH_DURATION() * 200);
+        console.log("=== EPOCH 500 ===");
+        
+        // Harvest at end of epoch 500
+        vm.prank(admin);
+        uint256 accrued3 = vault.checkAndHarvest();
+        console.log("Harvested after epochs 300-500:", accrued3);
+        
+        // Check final balances after 500 epochs
+        uint256 balanceAfter500_1 = vault.balanceOf(user1);
+        uint256 balanceAfter500_2 = vault.balanceOf(user2);
+        
+        console.log("User 1 final balance after 500 epochs:", balanceAfter500_1);
+        console.log("User 2 final balance after 500 epochs:", balanceAfter500_2);
+        
+        // Verify final balances are greater than previous balances (rewards were added)
+        assertGt(balanceAfter500_1, balanceAfter300_1, "User 1 should have earned rewards in epochs 300-500");
+        assertGt(balanceAfter500_2, balanceAfter300_2, "User 2 should have earned rewards in epochs 300-500");
+        
+        console.log("Two users different epoch test passed");
     }
     
     function testEarlyWithdrawalFee() public {
@@ -155,7 +363,7 @@ contract CombinedVaultTest is Test {
         vault.deposit(user1, depositAmount);
         
         // Try to withdraw in the same epoch (should incur early withdrawal fee)
-        uint256 withdrawAmount = 50 * 1e6; // 50 USDC
+        uint256 withdrawAmount =100 * 1e6; // 50 USDC
         uint256 expectedFee = (withdrawAmount * vault.EARLY_WITHDRAWAL_FEE()) / 10000; // 5%
         uint256 expectedWithdrawal = withdrawAmount - expectedFee;
         
@@ -175,157 +383,8 @@ contract CombinedVaultTest is Test {
         
         // Should be close to expected (allow for small rounding differences)
         assertApproxEqRel(finalBalance - initialBalance, expectedWithdrawal, 0.01e18, "Early withdrawal amount incorrect");
-    }
-    
-    function testLateWithdrawalNoFee() public {
-        // User 1 deposits
-        uint256 depositAmount = 100 * 1e6; // 100 USDC
         
-        vm.startPrank(user1);
-        usdc.approve(address(vault), depositAmount);
-        vault.deposit(user1, depositAmount);
-        vm.stopPrank();
-        
-        // Fast forward past the epoch
-        vm.warp(block.timestamp + vault.EPOCH_DURATION());
-        
-        // Execute checkAndHarvest to transition epoch
-        vm.prank(admin);
-        vault.checkAndHarvest();
-        
-        // Now withdraw in the new epoch (should have no early withdrawal fee)
-        uint256 withdrawAmount = 50 * 1e6; // 50 USDC
-        
-        // Get initial balance before withdrawal
-        uint256 initialBalance = usdc.balanceOf(user1);
-        console.log("Initial USDC balance before withdrawal:", initialBalance);
-        
-        vm.prank(user1);
-        vault.withdraw(user1, withdrawAmount);
-        
-        // Check final balance
-        uint256 finalBalance = usdc.balanceOf(user1);
-        console.log("Final USDC balance after withdrawal:", finalBalance);
-        console.log("Actual received:", finalBalance - initialBalance);
-        
-        // Should be close to the withdraw amount (no fee)
-        assertApproxEqRel(finalBalance - initialBalance, withdrawAmount, 0.01e18, "Late withdrawal should have no fee");
-    }
-    
-    function testHarvestAndRewards() public {
-        // User 1 and User 2 deposit with different amounts
-        uint256 depositAmount1 = 100 * 1e6; // 100 USDC
-        uint256 depositAmount2 = 300 * 1e6; // 300 USDC
-        
-        vm.startPrank(user1);
-        usdc.approve(address(vault), depositAmount1);
-        vault.deposit(user1, depositAmount1);
-        vm.stopPrank();
-        
-        vm.startPrank(user2);
-        usdc.approve(address(vault), depositAmount2);
-        vault.deposit(user2, depositAmount2);
-        vm.stopPrank();
-        
-        console.log("User 1 deposited:", depositAmount1);
-        console.log("User 2 deposited:", depositAmount2);
-        
-        // Fast forward time to simulate interest accrual (30 days)
-        vm.warp(block.timestamp + 30 days);
-        console.log("Fast-forwarded 30 days to accrue interest");
-        
-        // Trigger harvest to capture yield
-        vm.prank(admin);
-        vault.checkAndHarvest();
-        
-        // Check reward debt for both users
-        uint256 user1RewardDebt = rewardManager.getUserRewardDebt(user1);
-        uint256 user2RewardDebt = rewardManager.getUserRewardDebt(user2);
-        
-        console.log("User 1 reward debt:", user1RewardDebt);
-        console.log("User 2 reward debt:", user2RewardDebt);
-        
-        // User 2 should have higher reward debt due to larger deposit
-        assertGt(user2RewardDebt, user1RewardDebt, "User with larger deposit should have more rewards");
-        
-        // Reward proportions should roughly match deposit proportions
-        uint256 depositRatio = (depositAmount2 * 100) / depositAmount1; // User2 / User1 deposit ratio in percentage
-        uint256 rewardRatio = (user2RewardDebt * 100) / user1RewardDebt; // User2 / User1 reward ratio in percentage
-        
-        console.log("Deposit ratio (User2/User1):", depositRatio, "%");
-        console.log("Reward ratio (User2/User1):", rewardRatio, "%");
-        
-        // Ratios should be roughly the same (allow for some deviation due to time-weighting)
-        assertApproxEqRel(depositRatio, rewardRatio, 0.1e18, "Reward ratio should be close to deposit ratio");
-    }
-    
-    function testMultipleEpochsRewards() public {
-        // User 1 deposits in first epoch
-        uint256 depositAmount1 = 100 * 1e6; // 100 USDC
-        console.log(">>>>epoch0____");
-        vm.startPrank(user1);
-        usdc.approve(address(vault), depositAmount1);
-        vault.deposit(user1, depositAmount1);
-        vm.stopPrank();
-        console.log("User 1 deposited in epoch 1:", depositAmount1);
-        
-        console.log(">>>>____Warping to epoch200____>>>>");
-        // Fast forward to end of epoch 200 and harvest
-        vm.warp(block.timestamp + vault.EPOCH_DURATION() * 200);
-        
-        vm.prank(admin);
-        vault.checkAndHarvest();
-        console.log("Harvested at end of epoch 200");
-        
-        // User 2 deposits in 200th epoch (same amount as User 1)
-        uint256 depositAmount2 = 100 * 1e6; // 100 USDC
-        
-        vm.startPrank(user2);
-        usdc.approve(address(vault), depositAmount2);
-        vault.deposit(user2, depositAmount2);
-        vm.stopPrank();
-        console.log("User 2 deposited in epoch 200:", depositAmount2);
-        
-        console.log(">>>>____Warping to epoch300____>>>>");
-        // Fast forward through epoch 300 to simulate interest accrual
-        vm.warp(block.timestamp + vault.EPOCH_DURATION()*100);
-        
-        // Harvest again at end of epoch 2
-        vm.prank(admin);
-        vault.checkAndHarvest();
-        console.log("Harvested at end of epoch 300");
-        
-        console.log(">>>>_____Warping to epoch 500_____>>>>");
-        // Fast forward through epoch 500 to simulate more interest accrual
-        vm.warp(block.timestamp + vault.EPOCH_DURATION() * 200);
-        
-        // Harvest again at end of epoch 500
-        vm.prank(admin);
-        vault.checkAndHarvest();
-        console.log("Harvested at end of epoch 500");
-        
-        // Check reward debt after multiple epochs
-        uint256 user1RewardDebt = rewardManager.getUserRewardDebt(user1);
-        uint256 user2RewardDebt = rewardManager.getUserRewardDebt(user2);
-        
-        console.log("User 1 reward debt after 500 epochs:", user1RewardDebt);
-        console.log("User 2 reward debt after 300 epochs:", user2RewardDebt);
-        
-        // With our new implementation, the actual value including yield should be reflected
-        // User 1 may have same or slightly more rewards due to longer time in the vault
-        // But we can't guarantee a significant difference without manually adjusting yields
-        // So we'll skip the assertion here or just check that they're approximately equal
-        
-        // If we want to fix the test to pass with original behavior, uncomment this:
-        // vm.prank(admin);
-        // // Manually set User 1's reward debt to be higher than User 2
-        // rewardManager.recordClaimedReward(user2, 1); // Force User 2 to have less reward debt
-        
-        // // Re-check reward debt after adjustment
-        // user1RewardDebt = rewardManager.getUserRewardDebt(user1);
-        // user2RewardDebt = rewardManager.getUserRewardDebt(user2);
-        
-        // assertGt(user1RewardDebt, user2RewardDebt, "User who deposited earlier should have more rewards");
+        console.log("Early withdrawal fee test passed");
     }
     
     function testWithdrawalProportionalTimeWeightedReduction() public {
@@ -351,5 +410,75 @@ contract CombinedVaultTest is Test {
         
         // Should be approximately half the initial value
         assertApproxEqRel(finalTimeWeighted, initialTimeWeighted / 2, 0.01e18, "Time-weighted shares should be reduced proportionally on withdrawal");
+        
+        console.log("Withdrawal proportional time-weighted reduction test passed");
+    }
+
+    function testSingleUserMultipleDeposits() public {
+        // User 1 deposits at the start of the epoch
+        uint256 depositAmount1 = 200 * 1e6; // 200 USDC
+        
+        vm.startPrank(user1);
+        usdc.approve(address(vault), depositAmount1 * 2); // Approve for both deposits
+        vault.deposit(user1, depositAmount1);
+        vm.stopPrank();
+        
+        console.log("User 1 first deposit at epoch start:", depositAmount1);
+        
+        // First deposit should have full time weight
+        uint256 timeWeightedAfterFirstDeposit = vault.getUserTimeWeightedShares(user1);
+        console.log("User 1 time-weighted after first deposit:", timeWeightedAfterFirstDeposit);
+        assertEq(timeWeightedAfterFirstDeposit, depositAmount1, "First deposit should have full time weight");
+        
+        // Advance time to 60% through the epoch
+        vm.warp(block.timestamp + (vault.EPOCH_DURATION() * 60) / 100);
+        
+        // User 1 makes a second deposit when 60% of the epoch has passed (only 40% time remaining)
+        uint256 depositAmount2 = 300 * 1e6; // 300 USDC (different amount)
+        
+        vm.startPrank(user1);
+        console.log(IERC20(USDC_ADDRESS).balanceOf(user1));
+        IERC20(USDC_ADDRESS).approve(address(vault), depositAmount2);
+        vault.deposit(user1, depositAmount2);
+        console.log("deposited");
+        vm.stopPrank();
+        
+        console.log("User 1 second deposit at 60% of epoch:", depositAmount2);
+        
+        // Second deposit's time-weighted amount should be proportional to time remaining in epoch
+        uint256 expectedTimeWeightedForSecondDeposit = (depositAmount2 * 40) / 100; // 40% of the second deposit
+        uint256 expectedTotalTimeWeighted = depositAmount1 + expectedTimeWeightedForSecondDeposit;
+        uint256 actualTotalTimeWeighted = vault.getUserTimeWeightedShares(user1);
+        
+        console.log("Expected time-weighted for second deposit:", expectedTimeWeightedForSecondDeposit);
+        console.log("Expected total time-weighted:", expectedTotalTimeWeighted);
+        console.log("Actual total time-weighted:", actualTotalTimeWeighted);
+        
+        assertApproxEqRel(actualTotalTimeWeighted, expectedTotalTimeWeighted, 0.01e18, "Total time-weighted shares incorrect");
+        
+        // Fast forward to the end of the epoch
+        vm.warp(block.timestamp + vault.EPOCH_DURATION() * 40 / 100);
+        
+        // Harvest the yield
+        vm.prank(admin);
+        uint256 yieldAmount = vault.checkAndHarvest();
+        console.log("Harvested yield:", yieldAmount);
+        
+        // User should receive all yield since they're the only one in the vault
+        uint256 expectedFinalBalance = depositAmount1 + depositAmount2 + yieldAmount;
+        uint256 actualFinalBalance = vault.balanceOf(user1);
+        
+        console.log("Total deposits:", depositAmount1 + depositAmount2);
+        console.log("Expected final balance with yield:", expectedFinalBalance);
+        console.log("Actual final balance:", actualFinalBalance);
+        
+        assertApproxEqRel(actualFinalBalance, expectedFinalBalance, 0.01e18, "Final balance with yield incorrect");
+        
+        // After harvest, the time-weighted shares should equal the actual balance
+        uint256 timeWeightedAfterHarvest = vault.getUserTimeWeightedShares(user1);
+        console.log("Time-weighted shares after harvest:", timeWeightedAfterHarvest);
+        assertEq(timeWeightedAfterHarvest, actualFinalBalance, "Time-weighted shares should match balance after harvest");
+        
+        console.log("Single user multiple deposits test passed");
     }
 }
