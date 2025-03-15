@@ -9,6 +9,7 @@ remappings = [
     "@openzeppelin/=lib/openzeppelin-contracts/",
     "@aave/=lib/aave-v3-origin/src/",
     "@forge-std/=lib/forge-std/src/",
+    "@account-abstraction/=lib/account-abstraction/contracts/",
 ]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
