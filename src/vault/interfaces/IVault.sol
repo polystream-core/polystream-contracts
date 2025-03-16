@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.19;
 
 /**
  * @title IVault
@@ -16,17 +16,17 @@ interface IVault {
     /**
      * @dev Withdraw assets from the vault
      * @param user Address of the user to withdraw for
-     * @param shareAmount Amount of shares to withdraw
+     * @param amount Amount to withdraw
      */
-    function withdraw(address user, uint256 shareAmount) external;
+    function withdraw(address user, uint256 amount) external;
     
     /**
-     * @dev Check and harvest yield from protocols
+     * @dev Check and harvest yield from all protocols
      */
-    function checkAndHarvest() external returns (uint256);
+    function checkAndHarvest() external returns (uint256 harvestedAmount);
     
     /**
-     * @dev Get the current epoch number
+     * @dev Get the current epoch
      * @return Current epoch number
      */
     function getCurrentEpoch() external view returns (uint256);
@@ -38,33 +38,33 @@ interface IVault {
     function getUsers() external view returns (address[] memory);
     
     /**
-     * @dev Get user entry time
+     * @dev Get user entry time (time of first deposit)
      * @param user Address of the user
      * @return Entry time of the user
      */
     function getUserEntryTime(address user) external view returns (uint256);
     
     /**
-     * @dev Get total supply of shares
+     * @dev Get total supply of user balances
      * @return Total supply
      */
     function getTotalSupply() external view returns (uint256);
     
     /**
-     * @dev Get total time-weighted shares
-     * @return Total time-weighted shares
+     * @dev Get total time-weighted balances across all users
+     * @return Total time-weighted balance
      */
     function getTotalTimeWeightedShares() external view returns (uint256);
     
     /**
-     * @dev Get user time-weighted shares
+     * @dev Get user time-weighted balance
      * @param user Address of the user
-     * @return User's time-weighted shares
+     * @return User's time-weighted balance
      */
     function getUserTimeWeightedShares(address user) external view returns (uint256);
     
     /**
-     * @dev Get user's balance of shares
+     * @dev Get user balance 
      * @param account Address of the account
      * @return Balance of the account
      */

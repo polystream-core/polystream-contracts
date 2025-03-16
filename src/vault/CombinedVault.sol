@@ -3,7 +3,6 @@ pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "forge-std/console.sol";
 
@@ -16,8 +15,11 @@ import "./interfaces/IVault.sol";
  * @notice A yield-generating vault with improved time-weighted balance tracking
  * @dev Implements simple accounting without ERC20 shares
  */
-contract CombinedVault is IVault, Ownable, ReentrancyGuard {
+contract CombinedVault is IVault, ReentrancyGuard {
     using SafeERC20 for IERC20;
+
+    // Owner address
+    address public owner;
 
     // Protocol registry
     IRegistry public immutable registry;
@@ -72,6 +74,13 @@ contract CombinedVault is IVault, Ownable, ReentrancyGuard {
     event ProtocolAdded(uint256 indexed protocolId);
     event ProtocolRemoved(uint256 indexed protocolId);
     event RewardDistributed(address indexed user, uint256 rewardAmount);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    
+    // Custom onlyOwner modifier
+    modifier onlyOwner() {
+        require(msg.sender == owner, "CombinedVault: caller is not the owner");
+        _;
+    }
     
     /**
      * @dev Constructor
@@ -81,14 +90,26 @@ contract CombinedVault is IVault, Ownable, ReentrancyGuard {
     constructor(
         address _registry,
         address _asset
-    ) Ownable(msg.sender) {
+    ) {
         require(_registry != address(0), "Invalid registry address");
         require(_asset != address(0), "Invalid asset address");
         
+        owner = msg.sender;
         registry = IRegistry(_registry);
         asset = IERC20(_asset);
         lastEpochTime = block.timestamp;
         currentEpochNumber = block.timestamp / EPOCH_DURATION;
+    }
+    
+    /**
+     * @dev Transfers ownership of the contract to a new account (`newOwner`).
+     * Can only be called by the current owner.
+     */
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0), "CombinedVault: new owner is the zero address");
+        address oldOwner = owner;
+        owner = newOwner;
+        emit OwnershipTransferred(oldOwner, newOwner);
     }
     
     /**
@@ -301,8 +322,10 @@ contract CombinedVault is IVault, Ownable, ReentrancyGuard {
             currentEpochNumber = getCurrentEpoch();
             
             emit Harvested(block.timestamp, totalHarvested);
-            return harvestedAmount;
+            return totalHarvested;
         }
+        
+        return 0;
     }
     
     /**
