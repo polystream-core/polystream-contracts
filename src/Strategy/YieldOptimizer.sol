@@ -1,109 +1,66 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+// // SPDX-License-Identifier: MIT
+// pragma solidity ^0.8.19;
 
-import "@aave/contracts/interfaces/IPool.sol";
-import "@aave/contracts/protocol/libraries/types/DataTypes.sol";
-import "@layerbank-contracts/interfaces/ILToken.sol";
-import "@layerbank-contracts/interfaces/IRateModel.sol";
-import "forge-std/console.sol";
+// import "../core/CombinedVault.sol";
+// import "../core/interfaces/IRegistry.sol";
+// import "../adapters/interfaces/IProtocolAdapter.sol";
 
-contract YieldOptimizer {
-    // Addresses for Lending Pools
-    address public constant AAVE_POOL_ADDRESS = 0x11fCfe756c05AD438e312a7fd934381537D3cFfe;
-    address public constant AAVE_ASSET = 0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4;
-    address public constant LAYERBANK_ILTOKEN = 0x0D8F8e271DD3f2fC58e5716d3Ff7041dBe3F0688;
-    address public constant LAYERBANK_RATEMODEL = 0x09aD162E117eFCC5cBD5Fd4865818f2ABA8e80D7;
+// contract YieldOptimizer {
+//     IRegistry public registry;
+//     CombinedVault public vault;
+//     IERC20 public immutable asset;
 
-    // Lending Pool Interfaces
-    IPool public aavePool;
-    ILToken public layerBankToken;
-    IRateModel public layerBankRateModel;
+//     event OptimizedYield(uint256 oldProtocolId, uint256 newProtocolId, uint256 amount);
 
-    uint256 public constant ONE_RAY = 1e27;
-    uint256 public constant SECONDS_PER_YEAR = 31536000;
+//     constructor(address _registry, address _vault, address _asset) {
+//         require(_registry != address(0), "Invalid registry address");
+//         require(_vault != address(0), "Invalid vault address");
+//         require(_asset != address(0), "Invalid asset address");
 
-    // Current Pool State
-    address public currentLendingPool;
-    uint256 public lastCheckedAPY;
+//         vault = CombinedVault(_vault);
+//         registry = vault.registry();
+//         asset = IERC20(_asset);
+//     }
 
-    // APY values for testing
-    uint256 public aaveAPY;
-    uint256 public layerBankAPY;
+//     /**
+//      * @notice Optimizes yield by switching to the highest APY protocol
+//      * @dev Called automatically via Chainlink Automation at the end of each epoch
+//      */
+//     function optimizeYield() external {
+//         uint256 activeProtocolId = registry.getActiveProtocolId();
+//         uint256 currentAPY = registry.getAPY(activeProtocolId);
 
-    event PoolSwitched(address indexed newPool, uint256 newAPY);
+//         uint256[] memory allProtocols = registry.getAllProtocolIds();
+//         uint256 highestAPY = currentAPY;
+//         uint256 bestProtocolId = activeProtocolId;
 
-    constructor() {
-        aavePool = IPool(AAVE_POOL_ADDRESS);
-        layerBankToken = ILToken(LAYERBANK_ILTOKEN);
-        layerBankRateModel = IRateModel(LAYERBANK_RATEMODEL);
+//         // 🔍 Find the highest APY protocol
+//         for (uint256 i = 0; i < allProtocols.length; i++) {
+//             uint256 protocolId = allProtocols[i];
+//             uint256 apy = registry.getAPY(protocolId);
 
-        // Set the initial pool based on the highest APY
-        setFirstPool();
-    }
+//             if (apy > highestAPY) {
+//                 highestAPY = apy;
+//                 bestProtocolId = protocolId;
+//             }
+//         }
 
-    /// @notice Fetches APY from Aave lending pool
-    function getAaveAPY() public view returns (uint256) {
-        return aaveAPY;
-    }
+//         // 🚀 Migrate funds if a higher APY protocol is found
+//         if (bestProtocolId != activeProtocolId) {
+//             uint256 vaultBalance = vault.getTotalSupply();
 
-    /// @notice Fetches APY from LayerBank lending pool
-    function getLayerBankAPY() public view returns (uint256) {
-        return layerBankAPY;
-    }
+//             // 🏦 Withdraw from the current protocol
+//             address currentAdapter = registry.getAdapter(activeProtocolId, address(asset));
+//             vault._withdrawFromProtocols(vaultBalance, address(vault)); // Bring funds back to Vault
 
-    /// @notice Sets the initial pool based on the highest APY
-    function setFirstPool() internal {
-        uint256 aaveAPYValue = getAaveAPY();
-        uint256 layerBankAPYValue = getLayerBankAPY();
+//             // 🔄 Update to the new protocol
+//             registry.setActiveProtocol(bestProtocolId);
 
-        if (layerBankAPYValue > aaveAPYValue) {
-            currentLendingPool = LAYERBANK_ILTOKEN;
-            lastCheckedAPY = layerBankAPYValue;
-        } else {
-            currentLendingPool = AAVE_POOL_ADDRESS;
-            lastCheckedAPY = aaveAPYValue;
-        }
+//             // 💰 Deposit into the new protocol
+//             address newAdapter = registry.getAdapter(bestProtocolId, address(asset));
+//             IProtocolAdapter(newAdapter).supply(address(asset), vaultBalance);
 
-        emit PoolSwitched(currentLendingPool, lastCheckedAPY);
-    }
-
-    /// @notice Combined function for Chainlink Automation
-    /// This function checks APYs and switches pools if necessary
-    function optimizeYield() external {
-        uint256 aaveAPYValue = getAaveAPY();
-        uint256 layerBankAPYValue = getLayerBankAPY();
-        
-        console.log("Current Pool:", currentLendingPool);
-        console.log("Aave APY:", aaveAPYValue);
-        console.log("LayerBank APY:", layerBankAPYValue);
-
-        if (currentLendingPool == AAVE_POOL_ADDRESS && layerBankAPYValue > aaveAPYValue) {
-            switchLendingPool(LAYERBANK_ILTOKEN, layerBankAPYValue);
-        } else if (currentLendingPool == LAYERBANK_ILTOKEN && aaveAPYValue > layerBankAPYValue) {
-            switchLendingPool(AAVE_POOL_ADDRESS, aaveAPYValue);
-        } else {
-            console.log("No switch needed, staying in current pool.");
-        }
-    }
-
-    /// @notice Mock function to simulate pool switching (Replace with actual implementation)
-    function switchLendingPool(address newPool, uint256 newAPY) internal {
-        require(newPool != currentLendingPool, "Already in best pool");
-        console.log("Switching from", currentLendingPool, "to", newPool);
-
-        currentLendingPool = newPool;
-        lastCheckedAPY = newAPY;
-        
-        emit PoolSwitched(newPool, newAPY);
-    }
-
-    /// @notice Sets the Aave APY for testing purposes
-    function setAaveAPY(uint256 _aaveAPY) external {
-        aaveAPY = _aaveAPY;
-    }
-
-    /// @notice Sets the LayerBank APY for testing purposes
-    function setLayerBankAPY(uint256 _layerBankAPY) external {
-        layerBankAPY = _layerBankAPY;
-    }
-}
+//             emit OptimizedYield(activeProtocolId, bestProtocolId, vaultBalance);
+//         }
+//     }
+// }

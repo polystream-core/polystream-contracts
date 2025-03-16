@@ -4,7 +4,6 @@ pragma solidity ^0.8.19;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "forge-std/console.sol";
 
 import "./interfaces/IRegistry.sol";
 import "../adapters/interfaces/IProtocolAdapter.sol";
@@ -32,7 +31,8 @@ contract CombinedVault is IVault, ReentrancyGuard {
     uint256[] public activeProtocolIds;
     
     // EPOCH_DURATION is 1 day
-    uint256 public constant EPOCH_DURATION = 86400;
+    // EPOCH DURATION for testing is 5 minutes
+    uint256 public constant EPOCH_DURATION = 300;
     uint256 public lastEpochTime;
     
     // Tracking total balances
@@ -198,9 +198,6 @@ contract CombinedVault is IVault, ReentrancyGuard {
         totalUserBalance += amount;
         totalAdapterBalance += amount; // Will be updated when distributed to protocols
         
-        console.log("User deposited:", amount);
-        console.log("Time-weighted amount:", timeWeightedAmount);
-        
         // First-time depositor logic
         if (userData[user].deposits.length == 1) {
             activeUsers.push(user);
@@ -243,11 +240,6 @@ contract CombinedVault is IVault, ReentrancyGuard {
         // Calculate final withdrawal amount
         uint256 finalWithdrawAmount = amount - feeAmount;
         
-        console.log("Withdraw request:", amount);
-        console.log("Current epoch deposit:", currentEpochDepositTotal);
-        console.log("Fee deducted:", feeAmount);
-        console.log("Final withdraw amount:", finalWithdrawAmount);
-        
         // Convert fee to reward if applicable
         if (feeAmount > 0) {
             _convertFeeToReward(feeAmount);
@@ -281,7 +273,6 @@ contract CombinedVault is IVault, ReentrancyGuard {
      */
     function checkAndHarvest() external override nonReentrant returns (uint256 harvestedAmount) {
         if (block.timestamp >= lastEpochTime + EPOCH_DURATION) {
-            console.log("test arithmetic overflow");
             uint256 totalHarvested = _harvestAllProtocols();
             epochHarvestedAmount[currentEpochNumber] = totalHarvested;
             
@@ -308,7 +299,6 @@ contract CombinedVault is IVault, ReentrancyGuard {
                         // Update total user balance
                         totalUserBalance += userReward;
                         
-                        console.log("Distributed to user", user, ":", userReward);
                         
                         emit RewardDistributed(user, userReward);
                     }
@@ -418,11 +408,8 @@ contract CombinedVault is IVault, ReentrancyGuard {
             // Supply assets to the protocol and track how much was actually accepted
             uint256 supplied = adapter.supply(address(asset), amountPerProtocol);
             totalDistributed += supplied;
-            
-            console.log("Distributed to protocol", protocolId, ":", supplied);
         }
         
-        console.log("Total distributed:", totalDistributed);
     }
     
     /**
@@ -451,10 +438,8 @@ contract CombinedVault is IVault, ReentrancyGuard {
             }
             
             totalWithdrawn += withdrawn;
-            console.log("Withdrawn from protocol", protocolId, ":", withdrawn);
         }
         
-        console.log("Total withdrawn:", totalWithdrawn);
         return totalWithdrawn;
     }
     
@@ -471,7 +456,6 @@ contract CombinedVault is IVault, ReentrancyGuard {
         if (balance > 0) {
             // Withdraw all funds
             uint256 withdrawn = adapter.withdraw(address(asset), balance);
-            console.log("Withdrawn from protocol", protocolId, ":", withdrawn);
         }
     }
 
@@ -483,7 +467,6 @@ contract CombinedVault is IVault, ReentrancyGuard {
         // Reset adapter balance for recalculation
         totalAdapterBalance = 0;
         
-        console.log("Starting harvest from all protocols");
         
         for (uint i = 0; i < activeProtocolIds.length; i++) {
             uint256 protocolId = activeProtocolIds[i];
@@ -493,19 +476,12 @@ contract CombinedVault is IVault, ReentrancyGuard {
             uint256 harvested = adapter.harvest(address(asset));
             if (harvested > 0) {
                 totalHarvested += harvested;
-                console.log("Harvested from protocol", protocolId, ":", harvested);
-            } else {
-                console.log("Harvest failed for protocol", protocolId);
             }
             
             // Update adapter balance
             uint256 postHarvestBalance = adapter.getBalance(address(asset));
             totalAdapterBalance += postHarvestBalance;
-            console.log("Protocol", protocolId, "post-harvest balance:", postHarvestBalance);
         }
-        
-        console.log("Total harvested:", totalHarvested);
-        console.log("Updated total adapter balance:", totalAdapterBalance);
         
         return totalHarvested;
     }
@@ -515,7 +491,6 @@ contract CombinedVault is IVault, ReentrancyGuard {
      * Each user's time-weighted balance is set to their actual balance
      */
     function _resetTimeWeightedBalances() internal {
-        console.log("Resetting time-weighted balances for new epoch");
         
         for (uint256 i = 0; i < activeUsers.length; i++) {
             address user = activeUsers[i];
@@ -528,8 +503,6 @@ contract CombinedVault is IVault, ReentrancyGuard {
             // Reset user's time-weighted balance to match their actual balance
             userData[user].timeWeightedBalance = userData[user].balance;
             
-            console.log("User", user, "balance:", userData[user].balance);
-            console.log("Reset time-weighted balance for user", user, "to", userData[user].balance);
         }
     }
     
@@ -563,7 +536,6 @@ contract CombinedVault is IVault, ReentrancyGuard {
             IProtocolAdapter adapter = registry.getAdapter(protocolId, address(asset));
             
             adapter.convertFeeToReward(address(asset), feePerProtocol);
-            console.log("Fee converted to reward in protocol", protocolId, ":", feePerProtocol);
         }
     }
 }

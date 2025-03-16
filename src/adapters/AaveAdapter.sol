@@ -5,7 +5,6 @@ import "./interfaces/IProtocolAdapter.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "forge-std/console.sol";
 
 // Simplified Aave interfaces
 interface IAavePoolMinimal {
@@ -255,8 +254,6 @@ contract AaveAdapter is IProtocolAdapter, Ownable {
         // Supply asset to Aave
         pool.supply(asset, amount, address(this), 0);
 
-        console.log("Aave supply: ", receivedAmount);
-
         // return the underlying amount that was supplied
         return receivedAmount;
     }
@@ -299,11 +296,6 @@ contract AaveAdapter is IProtocolAdapter, Ownable {
         IERC20(asset).approve(address(pool), actualWithdrawn);
         IERC20(asset).transfer(msg.sender, actualWithdrawn);
 
-        //Log the withdrawal
-        console.log("Aave withdrawal request: ", withdrawAmount);
-        console.log("Actually withdrawn: ", actualWithdrawn);
-
-
         return actualWithdrawn;
     }
 
@@ -340,11 +332,6 @@ contract AaveAdapter is IProtocolAdapter, Ownable {
             totalPrincipal[asset] = 0;
         }
 
-        // Log the withdrawal
-        console.log("Aave withdrawal request: ", withdrawAmount);
-        console.log("Withdrawal to user: ", user);
-        console.log("Actually withdrawn by user: ", actualReceived);
-
         return actualReceived;
     }
 
@@ -360,9 +347,6 @@ contract AaveAdapter is IProtocolAdapter, Ownable {
         
         // Reduce the total principal to convert fee to yield
         totalPrincipal[asset] -= fee;
-        
-        console.log("Fee converted to reward:", fee);
-        console.log("Remaining principal:", totalPrincipal[asset]);
     }
 
     /**

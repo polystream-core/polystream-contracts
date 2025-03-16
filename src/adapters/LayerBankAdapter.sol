@@ -5,7 +5,6 @@ import "./interfaces/IProtocolAdapter.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "forge-std/console.sol";
 
 // LayerBank interfaces
 interface IGToken is IERC20 {
@@ -283,10 +282,6 @@ contract LayerBankAdapter is IProtocolAdapter, Ownable {
         uint256 gTokenBalanceAfter = IERC20(gToken).balanceOf(address(this));
         uint256 gTokensReceived = gTokenBalanceAfter - gTokenBalanceBefore;
 
-        // Log the receipt
-        console.log("LayerBank supply:", receivedAmount);
-        console.log("gTokens received:", gTokensReceived);
-
         // Return the underlying amount that was supplied
         return receivedAmount;
     }
@@ -364,10 +359,6 @@ contract LayerBankAdapter is IProtocolAdapter, Ownable {
 
         // Transfer withdrawn asset to sender
         IERC20(asset).transfer(msg.sender, actualWithdrawn);
-
-        // Log the withdrawal
-        console.log("LayerBank withdraw:", withdrawAmount);
-        console.log("Actually withdrawn:", actualWithdrawn);
 
         return actualWithdrawn;
     }
@@ -454,10 +445,6 @@ contract LayerBankAdapter is IProtocolAdapter, Ownable {
             totalPrincipal[asset] = 0;
         }
 
-        // Log the withdrawal
-        console.log("LayerBank withdrawToUser:", withdrawAmount);
-        console.log("Actually received by user:", actualReceived);
-
         return actualReceived;
     }
 
@@ -505,13 +492,6 @@ contract LayerBankAdapter is IProtocolAdapter, Ownable {
             yieldAmount = currentValueInUnderlying - totalPrincipal[asset];
         }
 
-        console.log("LayerBank harvest calculation:");
-        console.log("Current exchange rate:", currentExchangeRate);
-        console.log("gToken balance:", gTokenBalance);
-        console.log("Current value in underlying:", currentValueInUnderlying);
-        console.log("Total principal:", totalPrincipal[asset]);
-        console.log("Calculated yield amount:", yieldAmount);
-
         if (yieldAmount == 0) {
             return 0; // No yield to harvest
         }
@@ -539,9 +519,6 @@ contract LayerBankAdapter is IProtocolAdapter, Ownable {
         uint256 finalAssetBalance = IERC20(asset).balanceOf(address(this));
         uint256 actualWithdrawn = finalAssetBalance - initialAssetBalance;
 
-        // Verify our yield calculation against actual withdrawal
-        console.log("Actually withdrawn:", actualWithdrawn);
-
         // Step 5: Redeposit all assets back into LayerBank
         IERC20(asset).approve(gToken, actualWithdrawn);
 
@@ -566,9 +543,6 @@ contract LayerBankAdapter is IProtocolAdapter, Ownable {
 
         // Reduce the total principal to convert fee to yield
         totalPrincipal[asset] -= fee;
-
-        console.log("Fee converted to reward:", fee);
-        console.log("Remaining principal:", totalPrincipal[asset]);
     }
 
     /**

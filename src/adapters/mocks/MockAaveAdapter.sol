@@ -6,7 +6,6 @@ import "../../tokens/mocks/MockUSDC.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "forge-std/console.sol";
 
 /**
  * @title MockAaveAdapter
@@ -122,8 +121,6 @@ contract MockAaveAdapter is IProtocolAdapter, Ownable {
         // Update user balance (for tracking purposes)
         userBalances[asset][msg.sender] += receivedAmount;
         
-        console.log("Mock Aave supply: ", receivedAmount);
-        
         return receivedAmount;
     }
     
@@ -157,8 +154,6 @@ contract MockAaveAdapter is IProtocolAdapter, Ownable {
         } else {
             userBalances[asset][msg.sender] = 0;
         }
-        
-        console.log("Mock Aave withdrawal: ", withdrawAmount);
         
         return withdrawAmount;
     }
@@ -195,8 +190,6 @@ contract MockAaveAdapter is IProtocolAdapter, Ownable {
         } else {
             userBalances[asset][msg.sender] = 0;
         }
-        
-        console.log("Mock Aave withdrawal to user: ", withdrawAmount);
         
         return withdrawAmount;
     }
@@ -238,9 +231,6 @@ contract MockAaveAdapter is IProtocolAdapter, Ownable {
         // Store current exchange rate as last for next cycle
         lastExchangeRate[asset] = currentExchangeRate[asset];
         
-        console.log("Mock Aave harvest: Interest generated", yieldAmount);
-        console.log("Mock Aave: Minted yield tokens to adapter");
-        
         return yieldAmount;
     }
     
@@ -256,8 +246,7 @@ contract MockAaveAdapter is IProtocolAdapter, Ownable {
         
         // Reduce total principal by the fee amount
         totalPrincipal[asset] -= fee;
-        
-        console.log("Mock Aave: Fee converted to reward", fee);
+
     }
     
     /**

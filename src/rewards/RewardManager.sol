@@ -3,7 +3,6 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "../core/interfaces/IVault.sol";
-import "forge-std/console.sol";
 
 /**
  * @title RewardManager
@@ -51,14 +50,10 @@ contract RewardManager {
         
         if (totalWeightedShares == 0) return;
 
-        console.log("Epoch reward:", epochReward);
-        console.log("Total time-weighted shares:", totalWeightedShares);
-
         // Calculate the reward per share and add to accumulator
         uint256 rewardPerShare = (epochReward * PRECISION) / totalWeightedShares;
         accRewardPerShare += rewardPerShare;
         
-        console.log("Updated accRewardPerShare:", accRewardPerShare);
     }
 
     /**
@@ -69,10 +64,6 @@ contract RewardManager {
     function updateUserRewardDebt(address user) external {
         userRewardPerSharePaid[user] = accRewardPerShare;
         lastClaimEpoch[user] = vault.getCurrentEpoch();
-        
-        console.log("Updated user reward checkpoint for", user);
-        console.log("New userRewardPerSharePaid:", userRewardPerSharePaid[user]);
-        console.log("Last claim epoch:", lastClaimEpoch[user]);
     }
 
     /**
@@ -90,13 +81,6 @@ contract RewardManager {
         uint256 rewardDelta = accRewardPerShare - userRewardPerSharePaid[user];
         uint256 pendingReward = (weightedShares * rewardDelta) / PRECISION;
         
-        console.log("Calculating pending reward for", user);
-        console.log("User weighted shares:", weightedShares);
-        console.log("Current accRewardPerShare:", accRewardPerShare);
-        console.log("User's checkpoint:", userRewardPerSharePaid[user]);
-        console.log("Reward delta:", rewardDelta);
-        console.log("Pending reward:", pendingReward);
-        
         return pendingReward;
     }
     
@@ -108,10 +92,6 @@ contract RewardManager {
     function recordClaimedReward(address user, uint256 amount) external {
         claimedRewards[user] += amount;
         lastClaimEpoch[user] = vault.getCurrentEpoch();
-        
-        console.log("Recorded claimed reward for", user);
-        console.log("Amount claimed:", amount);
-        console.log("Total claimed to date:", claimedRewards[user]);
     }
     
     /**
@@ -163,7 +143,6 @@ contract RewardManager {
      * @param user The user address
      */
     function resetClaimedReward(address user) external {
-        console.log("Resetting claimed rewards for user:", user);
         claimedRewards[user] = 0;
         userRewardPerSharePaid[user] = 0;
         lastClaimEpoch[user] = 0;

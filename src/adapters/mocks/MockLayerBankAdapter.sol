@@ -6,7 +6,6 @@ import "../../tokens/mocks/MockUSDC.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "forge-std/console.sol";
 
 /**
  * @title MockLayerBankAdapter
@@ -131,9 +130,6 @@ contract MockLayerBankAdapter is IProtocolAdapter, Ownable {
         // Update gToken balance
         gTokenBalances[asset] += gTokenAmount;
         
-        console.log("Mock LayerBank supply: ", receivedAmount);
-        console.log("gTokens minted: ", gTokenAmount);
-        
         emit Supplied(asset, receivedAmount, gTokenAmount);
         
         return receivedAmount;
@@ -185,9 +181,6 @@ contract MockLayerBankAdapter is IProtocolAdapter, Ownable {
         } else {
             userBalances[asset][msg.sender] = 0;
         }
-        
-        console.log("Mock LayerBank withdrawal: ", withdrawAmount);
-        console.log("gTokens burned: ", gTokensToBurn);
         
         emit Withdrawn(asset, withdrawAmount, gTokensToBurn);
         
@@ -243,9 +236,6 @@ contract MockLayerBankAdapter is IProtocolAdapter, Ownable {
             userBalances[asset][msg.sender] = 0;
         }
         
-        console.log("Mock LayerBank withdrawal to user: ", withdrawAmount);
-        console.log("gTokens burned: ", gTokensToBurn);
-        
         emit Withdrawn(asset, withdrawAmount, gTokensToBurn);
         
         return withdrawAmount;
@@ -289,13 +279,6 @@ contract MockLayerBankAdapter is IProtocolAdapter, Ownable {
         // Update last harvest timestamp
         lastHarvestTimestamp[asset] = block.timestamp;
         
-        console.log("Mock LayerBank harvest:");
-        console.log("  Old exchange rate:", currentRate);
-        console.log("  New exchange rate:", exchangeRates[asset]);
-        console.log("  Rate increase:", rateIncrease);
-        console.log("  Yield amount:", yieldAmount);
-        console.log("  Minted yield tokens to adapter");
-        
         emit Harvested(asset, yieldAmount);
         
         return yieldAmount;
@@ -319,8 +302,6 @@ contract MockLayerBankAdapter is IProtocolAdapter, Ownable {
         if (gTokensToReduce <= gTokenBalances[asset]) {
             gTokenBalances[asset] -= gTokensToReduce;
         }
-        
-        console.log("Mock LayerBank: Fee converted to reward", fee);
     }
     
     /**
