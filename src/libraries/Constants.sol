@@ -21,6 +21,6 @@ library Constants {
     uint256 public constant DEFAULT_MIN_DEPOSIT = 1e6;
     
     // Default token name and symbol
-    string public constant DEFAULT_TOKEN_NAME = "Protected Yield USDC";
+    string public constant DEFAULT_TOKEN_NAME = "Polystream USDC";
     string public constant DEFAULT_TOKEN_SYMBOL = "pyUSDC";
 }

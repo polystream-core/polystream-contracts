@@ -3,37 +3,70 @@ pragma solidity ^0.8.19;
 
 /**
  * @title IVault
- * @notice Interface for the yield-generating vault
+ * @notice Interface defining the required functions for the Vault contract
  */
 interface IVault {
     /**
      * @dev Deposit assets into the vault
+     * @param user Address of the user to deposit for
      * @param amount Amount of assets to deposit
-     * @return shares Amount of shares minted
      */
-    function deposit(uint256 amount) external returns (uint256 shares);
+    function deposit(address user, uint256 amount) external;
     
     /**
      * @dev Withdraw assets from the vault
-     * @param shares Amount of shares to burn
-     * @return amount Amount of assets withdrawn
+     * @param user Address of the user to withdraw for
+     * @param amount Amount to withdraw
      */
-    function withdraw(uint256 shares) external returns (uint256 amount);
+    function withdraw(address user, uint256 amount) external;
     
     /**
-     * @dev Rebalance assets across protocols based on the target allocations
+     * @dev Check and harvest yield from all protocols
      */
-    function rebalance() external;
+    function checkAndHarvest() external returns (uint256 harvestedAmount);
     
     /**
-     * @dev Get total assets managed by the vault (across all protocols and in the vault itself)
-     * @return Total assets
+     * @dev Get the current epoch
+     * @return Current epoch number
      */
-    function totalAssets() external view returns (uint256);
+    function getCurrentEpoch() external view returns (uint256);
     
     /**
-     * @dev Get the price per share (assets per share)
-     * @return Price per share with 18 decimals precision
+     * @dev Get all active users
+     * @return Array of active user addresses
      */
-    function getPricePerShare() external view returns (uint256);
+    function getUsers() external view returns (address[] memory);
+    
+    /**
+     * @dev Get user entry time (time of first deposit)
+     * @param user Address of the user
+     * @return Entry time of the user
+     */
+    function getUserEntryTime(address user) external view returns (uint256);
+    
+    /**
+     * @dev Get total supply of user balances
+     * @return Total supply
+     */
+    function getTotalSupply() external view returns (uint256);
+    
+    /**
+     * @dev Get total time-weighted balances across all users
+     * @return Total time-weighted balance
+     */
+    function getTotalTimeWeightedShares() external view returns (uint256);
+    
+    /**
+     * @dev Get user time-weighted balance
+     * @param user Address of the user
+     * @return User's time-weighted balance
+     */
+    function getUserTimeWeightedShares(address user) external view returns (uint256);
+    
+    /**
+     * @dev Get user balance 
+     * @param account Address of the account
+     * @return Balance of the account
+     */
+    function balanceOf(address account) external view returns (uint256);
 }

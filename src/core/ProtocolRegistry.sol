@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "./interfaces/IRegistry.sol";
 import "../adapters/interfaces/IProtocolAdapter.sol";
 
 /**
  * @title ProtocolRegistry
- * @notice Registry for managing protocol adapters
- * @dev Implements the IRegistry interface
+ * @notice Registry for managing protocol adapters with allocation support
  */
-contract ProtocolRegistry is IRegistry, Ownable {
+contract ProtocolRegistry is IRegistry {
     // Protocol ID => Asset => Adapter
     mapping(uint256 => mapping(address => address)) public adapters;
     
@@ -20,15 +18,30 @@ contract ProtocolRegistry is IRegistry, Ownable {
     // Valid protocol IDs
     uint256[] public protocolIds;
     
+    // Currently active protocol ID
+    uint256 public activeProtocolId;
+    
+    // Owner address
+    address public owner;
+    
     // Events
     event ProtocolRegistered(uint256 indexed protocolId, string name);
     event AdapterRegistered(uint256 indexed protocolId, address indexed asset, address adapter);
     event AdapterRemoved(uint256 indexed protocolId, address indexed asset);
+    event ActiveProtocolSet(uint256 indexed protocolId);
+    
+    // Modifier to check if the caller is the owner
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Caller is not the owner");
+        _;
+    }
     
     /**
      * @dev Constructor
      */
-    constructor() Ownable(msg.sender) {}
+    constructor() {
+        owner = msg.sender;
+    }
     
     /**
      * @dev Register a protocol
@@ -56,6 +69,12 @@ contract ProtocolRegistry is IRegistry, Ownable {
         
         adapters[protocolId][asset] = adapter;
         
+        // If this is the first adapter or no active protocol is set, make this the active protocol
+        if (activeProtocolId == 0) {
+            activeProtocolId = protocolId;
+            emit ActiveProtocolSet(protocolId);
+        }
+        
         emit AdapterRegistered(protocolId, asset, adapter);
     }
     
@@ -69,7 +88,22 @@ contract ProtocolRegistry is IRegistry, Ownable {
         
         delete adapters[protocolId][asset];
         
+        // If the active protocol's adapter was removed, set active to 0
+        if (activeProtocolId == protocolId) {
+            activeProtocolId = 0;
+        }
+        
         emit AdapterRemoved(protocolId, asset);
+    }
+    
+    /**
+     * @dev Set the active protocol ID
+     * @param protocolId The protocol ID to set as active
+     */
+    function setActiveProtocol(uint256 protocolId) external override onlyOwner {
+        require(bytes(protocolNames[protocolId]).length > 0, "Protocol not registered");
+        activeProtocolId = protocolId;
+        emit ActiveProtocolSet(protocolId);
     }
     
     /**
@@ -81,6 +115,18 @@ contract ProtocolRegistry is IRegistry, Ownable {
     function getAdapter(uint256 protocolId, address asset) external view override returns (IProtocolAdapter) {
         address adapterAddress = adapters[protocolId][asset];
         require(adapterAddress != address(0), "Adapter not found");
+        
+        return IProtocolAdapter(adapterAddress);
+    }
+    
+    /**
+     * @dev Get the active adapter for an asset
+     * @param asset The address of the asset
+     * @return The active protocol adapter
+     */
+    function getActiveAdapter(address asset) external view override returns (IProtocolAdapter) {
+        address adapterAddress = adapters[activeProtocolId][asset];
+        require(adapterAddress != address(0), "Active adapter not found");
         
         return IProtocolAdapter(adapterAddress);
     }
@@ -106,6 +152,14 @@ contract ProtocolRegistry is IRegistry, Ownable {
     }
     
     /**
+     * @dev Get the current active protocol ID
+     * @return The active protocol ID
+     */
+    function getActiveProtocolId() external view override returns (uint256) {
+        return activeProtocolId;
+    }
+    
+    /**
      * @dev Check if an adapter is registered for a protocol and asset
      * @param protocolId The ID of the protocol
      * @param asset The address of the asset
@@ -113,5 +167,14 @@ contract ProtocolRegistry is IRegistry, Ownable {
      */
     function hasAdapter(uint256 protocolId, address asset) external view override returns (bool) {
         return adapters[protocolId][asset] != address(0);
+    }
+
+    /**
+     * @dev Transfer ownership to a new address
+     * @param newOwner The address of the new owner
+     */
+    function transferOwnership(address newOwner) external override onlyOwner {
+        require(newOwner != address(0), "New owner is the zero address");
+        owner = newOwner;
     }
 }

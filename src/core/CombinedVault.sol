@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "forge-std/console.sol";
 
-import "../core/interfaces/IRegistry.sol";
+import "./interfaces/IRegistry.sol";
 import "../adapters/interfaces/IProtocolAdapter.sol";
 import "./interfaces/IVault.sol";
 
@@ -20,6 +20,7 @@ contract CombinedVault is IVault, ReentrancyGuard {
 
     // Owner address
     address public owner;
+
 
     // Protocol registry
     IRegistry public immutable registry;

@@ -1,20 +1,16 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import "forge-std/console.sol";
 import "../src/core/CombinedVault.sol";
 import "../src/core/ProtocolRegistry.sol";
-import "../src/adapters/AaveAdapter.sol";
+import "../src/adapters/mocks/MockAaveAdapter.sol";
+import "../src/adapters/mocks/MockLayerBankAdapter.sol";
+import "../src/tokens/mocks/MockUSDC.sol";
 import "../src/libraries/Constants.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-contract CombinedVaultTest is Test {
-    // Contract addresses on Scroll
-    address constant AAVE_POOL_ADDRESS = 0x11fCfe756c05AD438e312a7fd934381537D3cFfe;
-    address constant USDC_ADDRESS = 0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4;
-    address constant USDC_ATOKEN_ADDRESS = 0x1D738a3436A8C49CefFbaB7fbF04B660fb528CbD;
-    
+contract CombinedVaultMockTest is Test {
     // Test users
     address public admin;
     address public user1;
@@ -22,11 +18,17 @@ contract CombinedVaultTest is Test {
     
     // Core contracts
     ProtocolRegistry public registry;
-    AaveAdapter public aaveAdapter;
+    MockAaveAdapter public mockAaveAdapter;
+    MockLayerBankAdapter public mockLayerBankAdapter;
     CombinedVault public vault;
     
     // Token
-    IERC20 public usdc;
+    MockUSDC public mockUSDC;
+    
+    // Constants for testing
+    uint256 constant INITIAL_MINT = 10000 * 1e6; // 10,000 USDC
+    uint256 constant DEPOSIT_AMOUNT_1 = 1000 * 1e6; // 1,000 USDC
+    uint256 constant DEPOSIT_AMOUNT_2 = 2000 * 1e6; // 2,000 USDC
     
     function setUp() public {
         // Create test accounts
@@ -37,43 +39,60 @@ contract CombinedVaultTest is Test {
         vm.deal(user1, 10 ether);
         vm.deal(user2, 10 ether);
         
-        // Give test users some USDC
-        deal(USDC_ADDRESS, user1, 1000 * 1e6);
-        deal(USDC_ADDRESS, user2, 1000 * 1e6);
-        console.log("User 1 USDC balance:", IERC20(USDC_ADDRESS).balanceOf(user1));
-        console.log("User 2 USDC balance:", IERC20(USDC_ADDRESS).balanceOf(user2));
-
-        // Set up as admin for all deployments and admin operations
+        // Deploy as admin
         vm.startPrank(admin);
+        
+        // Deploy mock USDC
+        mockUSDC = new MockUSDC(admin);
+        console.log("MockUSDC deployed at:", address(mockUSDC));
         
         // Deploy registry
         registry = new ProtocolRegistry();
+        console.log("Registry deployed at:", address(registry));
         
-        // Deploy Aave adapter
-        aaveAdapter = new AaveAdapter(AAVE_POOL_ADDRESS);
+        // Deploy mock adapters
+        mockAaveAdapter = new MockAaveAdapter(address(mockUSDC));
+        mockLayerBankAdapter = new MockLayerBankAdapter(address(mockUSDC));
+        console.log("MockAaveAdapter deployed at:", address(mockAaveAdapter));
+        console.log("MockLayerBankAdapter deployed at:", address(mockLayerBankAdapter));
         
-        // Register protocol in registry
-        registry.registerProtocol(Constants.AAVE_PROTOCOL_ID, "Aave V3");
+        // Add adapters as minters for MockUSDC
+        mockUSDC.addMinter(address(mockAaveAdapter));
+        mockUSDC.addMinter(address(mockLayerBankAdapter));
+        console.log("Added adapters as minters for MockUSDC");
         
-        // Add USDC as supported asset in Aave adapter
-        aaveAdapter.addSupportedAsset(USDC_ADDRESS, USDC_ATOKEN_ADDRESS);
+        // Configure adapters
+        mockAaveAdapter.addSupportedAsset(address(mockUSDC), address(mockUSDC));
+        mockLayerBankAdapter.addSupportedAsset(address(mockUSDC), address(mockUSDC));
         
-        // Register adapter in registry
-        registry.registerAdapter(Constants.AAVE_PROTOCOL_ID, USDC_ADDRESS, address(aaveAdapter));
+        // Set APYs
+        mockAaveAdapter.setAPY(address(mockUSDC), 300); // 3%
+        mockLayerBankAdapter.setAPY(address(mockUSDC), 500); // 5%
+        
+        // Register protocols
+        registry.registerProtocol(Constants.AAVE_PROTOCOL_ID, "Mock Aave V3");
+        registry.registerProtocol(Constants.LAYERBANK_PROTOCOL_ID, "Mock LayerBank");
+        
+        // Register adapters
+        registry.registerAdapter(Constants.AAVE_PROTOCOL_ID, address(mockUSDC), address(mockAaveAdapter));
+        registry.registerAdapter(Constants.LAYERBANK_PROTOCOL_ID, address(mockUSDC), address(mockLayerBankAdapter));
         
         // Deploy vault
-        vault = new CombinedVault(
-            address(registry),
-            USDC_ADDRESS
-        );
+        vault = new CombinedVault(address(registry), address(mockUSDC));
+        console.log("CombinedVault deployed at:", address(vault));
         
-        // Add Aave protocol to vault
+        // Add protocols to vault
         vault.addProtocol(Constants.AAVE_PROTOCOL_ID);
+        
+        // Mint USDC to test users
+        mockUSDC.mint(user1, INITIAL_MINT);
+        mockUSDC.mint(user2, INITIAL_MINT);
         
         vm.stopPrank();
         
-        // Initialize token instance
-        usdc = IERC20(USDC_ADDRESS);
+        console.log("Test setup complete");
+        console.log("User1 USDC balance:", mockUSDC.balanceOf(user1));
+        console.log("User2 USDC balance:", mockUSDC.balanceOf(user2));
     }
     
     function testSingleUserDepositWithdraw() public {
@@ -81,7 +100,7 @@ contract CombinedVaultTest is Test {
         uint256 depositAmount = 100 * 1e6; // 100 USDC
         
         vm.startPrank(user1);
-        usdc.approve(address(vault), depositAmount);
+        mockUSDC.approve(address(vault), depositAmount);
         vault.deposit(user1, depositAmount);
         
         // Verify deposit was successful
@@ -89,12 +108,12 @@ contract CombinedVaultTest is Test {
         assertEq(vault.getUserTimeWeightedShares(user1), depositAmount, "Time-weighted shares should match deposit for first deposit");
         
         // Withdraw full amount
-        uint256 initialBalance = usdc.balanceOf(user1);
+        uint256 initialBalance = mockUSDC.balanceOf(user1);
         vault.withdraw(user1, depositAmount);
         vm.stopPrank();
         
         // Verify withdrawal
-        uint256 finalBalance = usdc.balanceOf(user1);
+        uint256 finalBalance = mockUSDC.balanceOf(user1);
         assertEq(vault.balanceOf(user1), 0, "User balance should be zero after full withdrawal");
         
         console.log("Single user deposit and withdraw test passed");
@@ -105,7 +124,7 @@ contract CombinedVaultTest is Test {
         uint256 depositAmount = 100 * 1e6; // 100 USDC
         
         vm.startPrank(user1);
-        usdc.approve(address(vault), depositAmount);
+        mockUSDC.approve(address(vault), depositAmount);
         vault.deposit(user1, depositAmount);
         vm.stopPrank();
         
@@ -125,13 +144,13 @@ contract CombinedVaultTest is Test {
         uint256 withdrawAmount = expectedTotal;
         
         // Get initial balance before withdrawal
-        uint256 initialBalance = usdc.balanceOf(user1);
+        uint256 initialBalance = mockUSDC.balanceOf(user1);
         
         vm.prank(user1);
         vault.withdraw(user1, withdrawAmount);
         
         // Check final balance
-        uint256 finalBalance = usdc.balanceOf(user1);
+        uint256 finalBalance = mockUSDC.balanceOf(user1);
         console.log("Initial balance:", initialBalance);
         console.log("Final balance:", finalBalance);
         console.log("Difference:", finalBalance - initialBalance);
@@ -148,12 +167,12 @@ contract CombinedVaultTest is Test {
         uint256 depositAmount2 = 300 * 1e6; // 300 USDC
         
         vm.startPrank(user1);
-        usdc.approve(address(vault), depositAmount1);
+        mockUSDC.approve(address(vault), depositAmount1);
         vault.deposit(user1, depositAmount1);
         vm.stopPrank();
         
         vm.startPrank(user2);
-        usdc.approve(address(vault), depositAmount2);
+        mockUSDC.approve(address(vault), depositAmount2);
         vault.deposit(user2, depositAmount2);
         vm.stopPrank();
         
@@ -204,7 +223,7 @@ contract CombinedVaultTest is Test {
         uint256 depositAmount1 = 200 * 1e6; // 200 USDC
         
         vm.startPrank(user1);
-        usdc.approve(address(vault), depositAmount1);
+        mockUSDC.approve(address(vault), depositAmount1);
         vault.deposit(user1, depositAmount1);
         vm.stopPrank();
         
@@ -218,7 +237,7 @@ contract CombinedVaultTest is Test {
         uint256 depositAmount2 = 500 * 1e6; // 500 USDC (larger amount)
         
         vm.startPrank(user2);
-        usdc.approve(address(vault), depositAmount2);
+        mockUSDC.approve(address(vault), depositAmount2);
         vault.deposit(user2, depositAmount2);
         vm.stopPrank();
         
@@ -271,7 +290,7 @@ contract CombinedVaultTest is Test {
         
         console.log("=== EPOCH 0 ===");
         vm.startPrank(user1);
-        usdc.approve(address(vault), depositAmount1);
+        mockUSDC.approve(address(vault), depositAmount1);
         vault.deposit(user1, depositAmount1);
         vm.stopPrank();
         
@@ -294,7 +313,7 @@ contract CombinedVaultTest is Test {
         uint256 depositAmount2 = 200 * 1e6; // 200 USDC
         
         vm.startPrank(user2);
-        usdc.approve(address(vault), depositAmount2);
+        mockUSDC.approve(address(vault), depositAmount2);
         vault.deposit(user2, depositAmount2);
         vm.stopPrank();
         
@@ -359,16 +378,16 @@ contract CombinedVaultTest is Test {
         uint256 depositAmount = 100 * 1e6; // 100 USDC
         
         vm.startPrank(user1);
-        usdc.approve(address(vault), depositAmount);
+        mockUSDC.approve(address(vault), depositAmount);
         vault.deposit(user1, depositAmount);
         
         // Try to withdraw in the same epoch (should incur early withdrawal fee)
-        uint256 withdrawAmount =100 * 1e6; // 50 USDC
+        uint256 withdrawAmount = 100 * 1e6; // 100 USDC
         uint256 expectedFee = (withdrawAmount * vault.EARLY_WITHDRAWAL_FEE()) / 10000; // 5%
         uint256 expectedWithdrawal = withdrawAmount - expectedFee;
         
         // Get initial balance before withdrawal
-        uint256 initialBalance = usdc.balanceOf(user1);
+        uint256 initialBalance = mockUSDC.balanceOf(user1);
         console.log("Initial USDC balance before withdrawal:", initialBalance);
         
         // Withdraw
@@ -376,7 +395,7 @@ contract CombinedVaultTest is Test {
         vm.stopPrank();
         
         // Check final balance
-        uint256 finalBalance = usdc.balanceOf(user1);
+        uint256 finalBalance = mockUSDC.balanceOf(user1);
         console.log("Final USDC balance after withdrawal:", finalBalance);
         console.log("Actual received:", finalBalance - initialBalance);
         console.log("Expected to receive:", expectedWithdrawal);
@@ -392,7 +411,7 @@ contract CombinedVaultTest is Test {
         uint256 depositAmount = 100 * 1e6; // 100 USDC
         
         vm.startPrank(user1);
-        usdc.approve(address(vault), depositAmount);
+        mockUSDC.approve(address(vault), depositAmount);
         vault.deposit(user1, depositAmount);
         
         // Check initial time-weighted shares
@@ -419,7 +438,7 @@ contract CombinedVaultTest is Test {
         uint256 depositAmount1 = 200 * 1e6; // 200 USDC
         
         vm.startPrank(user1);
-        usdc.approve(address(vault), depositAmount1 * 2); // Approve for both deposits
+        mockUSDC.approve(address(vault), depositAmount1 * 2); // Approve for both deposits
         vault.deposit(user1, depositAmount1);
         vm.stopPrank();
         
@@ -437,10 +456,8 @@ contract CombinedVaultTest is Test {
         uint256 depositAmount2 = 300 * 1e6; // 300 USDC (different amount)
         
         vm.startPrank(user1);
-        console.log(IERC20(USDC_ADDRESS).balanceOf(user1));
-        IERC20(USDC_ADDRESS).approve(address(vault), depositAmount2);
+        mockUSDC.approve(address(vault), depositAmount2);
         vault.deposit(user1, depositAmount2);
-        console.log("deposited");
         vm.stopPrank();
         
         console.log("User 1 second deposit at 60% of epoch:", depositAmount2);
@@ -480,5 +497,68 @@ contract CombinedVaultTest is Test {
         assertEq(timeWeightedAfterHarvest, actualFinalBalance, "Time-weighted shares should match balance after harvest");
         
         console.log("Single user multiple deposits test passed");
+    }
+    
+    function testWithdrawAccruedYield() public {
+        console.log("===== Testing Withdraw Accrued Yield =====");
+        
+        // User1 deposits
+        vm.startPrank(user1);
+        mockUSDC.approve(address(vault), DEPOSIT_AMOUNT_1);
+        vault.deposit(user1, DEPOSIT_AMOUNT_1);
+        vm.stopPrank();
+        
+        console.log("User1 deposited:", DEPOSIT_AMOUNT_1);
+        
+        // Initial balance check
+        uint256 user1InitialVaultBalance = vault.balanceOf(user1);
+        uint256 user1InitialUSDCBalance = mockUSDC.balanceOf(user1);
+        console.log("User1 initial vault balance:", user1InitialVaultBalance);
+        console.log("User1 initial USDC balance:", user1InitialUSDCBalance);
+        
+        // Fast forward past the epoch
+        uint256 epochDuration = vault.EPOCH_DURATION();
+        vm.warp(block.timestamp + epochDuration);
+        
+        // Check and harvest to generate yield
+        vm.prank(admin);
+        uint256 harvestedYield = vault.checkAndHarvest();
+        console.log("Harvested yield:", harvestedYield);
+        
+        // Check vault balance after yield
+        uint256 user1BalanceAfterYield = vault.balanceOf(user1);
+        console.log("User1 vault balance after yield:", user1BalanceAfterYield);
+        
+        // Calculate accrued yield
+        uint256 accruedYield = user1BalanceAfterYield - user1InitialVaultBalance;
+        console.log("User1 accrued yield:", accruedYield);
+        
+        // Advance to next epoch to avoid early withdrawal fee on yield
+        vm.warp(block.timestamp + epochDuration);
+        
+        // The mock adapters will now mint tokens internally as part of harvest
+        
+        // User1 withdraws everything (original deposit + yield)
+        vm.startPrank(user1);
+        vault.withdraw(user1, user1BalanceAfterYield);
+        vm.stopPrank();
+        
+        // Check final USDC balance
+        uint256 user1FinalUSDCBalance = mockUSDC.balanceOf(user1);
+        console.log("User1 final USDC balance:", user1FinalUSDCBalance);
+        
+        // Calculate total received from withdrawal
+        uint256 totalReceived = user1FinalUSDCBalance - user1InitialUSDCBalance;
+        console.log("Total USDC received from withdrawal:", totalReceived);
+        
+        // Verify user received full deposit + yield (minus any applicable fees)
+        // We expect no fees since we're in a new epoch
+        assertApproxEqRel(totalReceived, user1BalanceAfterYield, 0.01e18, "User should receive full deposit plus yield");
+        
+        // Verify vault balance is now zero
+        uint256 finalVaultBalance = vault.balanceOf(user1);
+        assertEq(finalVaultBalance, 0, "Vault balance should be zero after full withdrawal");
+        
+        console.log("Withdraw accrued yield test passed");
     }
 }
