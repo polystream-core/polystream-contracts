@@ -121,46 +121,191 @@ The strategy contracts automate and optimize yield farming strategies:
 - [Check & Harvest](https://automation.chain.link/base-sepolia/9221094301717693037134162986003226806540908205494210047742633189647059819185)
 
 
-For further technical details and integration guidelines, please visit our [documentation](https://docs.polystream.xyz).
+# Running Foundry Test Scripts
 
+This guide explains how to set up Foundry, configure dependencies, and run test scripts for Compound, Aave, and LayerBank integrations.
 
+---
 
-## Development
+## 1. Install Foundry
 
-### Installation
+Foundry is a Rust-based Ethereum development framework providing tools like `forge`, `cast`, and `anvil` for compiling, deploying, and testing smart contracts.
 
-Clone the repository and install dependencies:
+### Install Foundry (Linux/Mac)
 
-```bash
-git clone https://github.com/your-repo/polystream-contracts.git
+```sh
+curl -L https://foundry.paradigm.xyz | bash
+```
+
+After installation, reload your shell:
+```sh
+foundryup
+```
+
+Verify installation:
+```sh
+forge --version
+```
+
+### Install Foundry (Windows)
+Option 1: Using Windows Subsystem for Linux (WSL)
+1. Install WSL and Ubuntu from the Microsoft Store.
+2. Open WSL and follow the Linux installation steps above.
+
+Option 2: Using PowerShell
+Run the following command in PowerShell:
+```sh
+iwr -useb https://foundry.paradigm.xyz | iex
+```
+
+Restart the terminal and run:
+```sh
+foundryup
+```
+
+Verify installation:
+```sh
+forge --version
+```
+
+## 2. Clone and Configure the Repository
+After installing Foundry, clone the repository:
+```sh
+git clone https://github.com/polystream-core/polystream-contracts
 cd polystream-contracts
-forge install
 ```
 
-### Compilation
+### Install Dependencies
+Foundry requires external libraries (Compound, Aave, LayerBank). Install them using `forge install`:
 
-Compile contracts using Forge:
+```sh
+forge install --no-git "@openzeppelin=openzeppelin/openzeppelin-contracts"
+forge install --no-git "@compound=compound-finance/comet"
+forge install --no-git "@aave=aave/aave-v3-core"
+forge install --no-git "@layerbank-contracts=layerbank/layerbank-core"
+forge install --no-git "@forge-std=foundry-rs/forge-std"
+forge install --no-git "@account-abstraction=account-abstraction/contracts"
+```
+This command ensures all dependencies are placed in the `lib/` directory.
 
-```bash
-forge build
+#### Update Foundry Configuration
+Modify the `foundry.toml` file to include the following settings:
+```sh
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+via_ir = true
+optimizer = true
+optimizer_runs = 200
+remappings = [
+    "@syncswapcontracts/=lib/core-contracts/contracts/",
+    "@layerbank-contracts/=lib/contracts/",
+    "@openzeppelin/=lib/openzeppelin-contracts/",
+    "@aave/=lib/aave-v3-origin/src/",
+    "@forge-std/=lib/forge-std/src/",
+    "@account-abstraction/=lib/account-abstraction/contracts/",
+    "@compound/=lib/comet/contracts/"
+]
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+```
+This configuration:
+- Enables IR-based compilation (`via_ir = true`) for optimized bytecode.
+- Enables Solidity optimizer with 200 runs (`optimizer = true`).
+- Defines remappings for external dependencies.
+- Specifies `src/` as the source directory and `lib/` as the library directory.
+
+## 3. Run a Local Fork with Anvil
+Anvil is a fast Ethereum RPC fork provider for running local blockchain simulations.
+
+#### Start Anvil with Forking
+Run the following command to start an Anvil instance:
+
+```sh
+anvil --fork-url https://your-rpc-url.com --chain-id YOUR_CHAIN_ID
+```
+Replace:
+- `https://your-rpc-url.com` with your Ethereum RPC provider (Alchemy, Infura, QuickNode, etc.).
+- `YOUR_CHAIN_ID` with the actual Chain ID of the blockchain you're testing (e.g., `1` for Ethereum, `534352` for Scroll).
+
+Example for Scroll Mainnet (using Alchemy):
+```sh
+anvil --fork-url https://scroll-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY --chain-id 534352
+```
+What This Does:
+- Forks the mainnet, allowing contract interactions as if on mainnet.
+- Persists the blockchain state, so transactions behave realistically.
+- Runs a local RPC server (`127.0.0.1:8545`) for Foundry tests.
+
+## Run Foundry Tests
+Navigate to the Test Directory
+```sh
+cd test
 ```
 
-### Testing
+Run a Specific Test
+Use the following command:
+```sh
+forge test --fork-url http://127.0.0.1:8545 --match-path test/YOUR_TEST_SCRIPT.t.sol -vvv
+```
+Replace `YOUR_TEST_SCRIPT.t.sol` with the actual test file name.
+Example:
+```sh
+forge test --fork-url http://127.0.0.1:8545 --match-path test/CompoundAdapterTest.t.sol -vvv
+```
+Explanation of Flags:
+- --fork-url `http://127.0.0.1:8545`→ Connects to the locally running Anvil fork.
+- `--match-path test/YOUR_TEST_SCRIPT.t.sol` → Runs a specific test script.
+- `-vvv` → Enables verbose mode (displays logs, transactions, and errors).
 
-Run tests with Forge:
+## 5. Log Successful Test Runs
+Use the following command to log test results and store them in a file:
+```sh
+forge test --fork-url http://127.0.0.1:8545 -vvv | tee test-results.log
+```
+`tee test-results.log` → Saves all logs to test-results.log.
 
-```bash
-forge test
+Review logs by opening the file:
+```sh
+cat test-results.log
 ```
 
-## Deployment
+Example Running Test Script for Combined Vault
+```sh
+forge test --fork-url http://127.0.0.1:8545 --match-path test/CombinedVault.t.sol -vvv
+```
+If successful, the output will look like:
+```sh
+Ran 8 tests for test/CombinedVault.t.sol:CombinedVaultTest
+[PASS] testEarlyWithdrawalFee() (gas: 607134)
+Logs:
+  User 1 USDC balance: 1000000000
+  User 2 USDC balance: 1000000000
+  Distributing assets to Active Protocol ID: 1
+  Supplied to Protocol ID: 1 Amount: 100000000
+  Initial USDC balance before withdrawal: 900000000
+  Final USDC balance after withdrawal: 995000000
+  Actual received: 95000000
+  Expected to receive: 95000000
+  Early withdrawal fee test passed
 
-Contracts are deployed on:
+// ... other test cases
 
-- **Scroll Sepolia Testnet**
-- **Base Sepolia Testnet**
+Suite result: ok. 8 passed; 0 failed; 0 skipped; finished in 2.24s (13.10s CPU time)      
 
-Refer to [Contract Addresses](https://docs.polystream.xyz) for deployed addresses.
+Ran 1 test suite in 2.28s (2.24s CPU time): 8 tests passed, 0 failed, 0 skipped (8 total tests)
+```
+
+## Summary
+
+| Step                 | Command                                        | Description |
+|----------------------|-----------------------------------------------|-------------|
+| **Install Foundry**  | `foundryup`                                   | Installs Foundry tools (`forge`, `cast`, `anvil`) |
+| **Clone Repository** | `git clone YOUR_REPO`                         | Clones the project to your local machine |
+| **Install Dependencies** | `forge install ...`                        | Installs external libraries like Compound, Aave, LayerBank |
+| **Start Anvil**      | `anvil --fork-url YOUR_RPC_URL --chain-id YOUR_CHAIN_ID` | Runs a local forked blockchain |
+| **Run Tests**        | `forge test --fork-url http://127.0.0.1:8545 -vvv` | Runs tests against the forked blockchain |
 
 ## Documentation
 
