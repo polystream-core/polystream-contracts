@@ -4,6 +4,8 @@ pragma solidity ^0.8.19;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "forge-std/console.sol";
+
 
 import "./interfaces/IRegistry.sol";
 import "../adapters/interfaces/IProtocolAdapter.sol";
@@ -19,7 +21,7 @@ contract CombinedVault is IVault, ReentrancyGuard {
 
     // Owner address
     address public owner;
-
+    address public authorizedCaller; 
 
     // Protocol registry
     IRegistry public immutable registry;
@@ -76,6 +78,7 @@ contract CombinedVault is IVault, ReentrancyGuard {
     event ProtocolRemoved(uint256 indexed protocolId);
     event RewardDistributed(address indexed user, uint256 rewardAmount);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event AuthorizedCallerUpdated(address indexed previousCaller, address indexed newCaller);
     
     // Custom onlyOwner modifier
     modifier onlyOwner() {
@@ -83,6 +86,11 @@ contract CombinedVault is IVault, ReentrancyGuard {
         _;
     }
     
+    modifier onlyOwnerOrAuthorized() {
+        require(msg.sender == owner || msg.sender == authorizedCaller, "Not authorized");
+        _;
+    }
+
     /**
      * @dev Constructor
      * @param _registry Address of the protocol registry
@@ -102,6 +110,16 @@ contract CombinedVault is IVault, ReentrancyGuard {
         currentEpochNumber = block.timestamp / EPOCH_DURATION;
     }
     
+    /**
+     * @dev Allows the owner to set an authorized caller (e.g., YieldOptimizer or Chainlink automation).
+     * @param newCaller The new authorized caller address.
+     */
+    function setAuthorizedCaller(address newCaller) external onlyOwner {
+        require(newCaller != address(0), "Invalid address");
+        emit AuthorizedCallerUpdated(authorizedCaller, newCaller);
+        authorizedCaller = newCaller;
+    }
+
     /**
      * @dev Transfers ownership of the contract to a new account (`newOwner`).
      * Can only be called by the current owner.
@@ -233,7 +251,7 @@ contract CombinedVault is IVault, ReentrancyGuard {
         
         if (currentEpochDepositTotal > 0) {
             uint256 earlyWithdrawalAmount = amount <= currentEpochDepositTotal ? 
-                                           amount : currentEpochDepositTotal;
+            amount : currentEpochDepositTotal;
             feeAmount = (earlyWithdrawalAmount * EARLY_WITHDRAWAL_FEE) / 10000;
         }
         
@@ -318,7 +336,21 @@ contract CombinedVault is IVault, ReentrancyGuard {
         
         return 0;
     }
-    
+
+    function supplyToProtocol(uint256 protocolId, uint256 amount) external onlyOwnerOrAuthorized {
+        require(amount > 0, "Amount must be greater than zero");
+        
+        IProtocolAdapter adapter = registry.getAdapter(protocolId, address(asset));
+        require(address(adapter) != address(0), "Invalid protocol adapter");
+
+        // Approve the protocol adapter to spend the vault's funds
+        asset.approve(address(adapter), amount);
+
+        // Supply funds to the new protocol
+        uint256 supplied = adapter.supply(address(asset), amount);
+        require(supplied > 0, "Supply failed");
+    }
+
     /**
      * @dev Get the current epoch
      * @return Current epoch number
@@ -389,29 +421,27 @@ contract CombinedVault is IVault, ReentrancyGuard {
      * @dev Internal function to distribute assets to protocols
      */
     function _distributeAssets() internal {
-        if (activeProtocolIds.length == 0) return;
-        
+        // Get the current active protocol from the registry
+        uint256 activeProtocolId = registry.getActiveProtocolId();
+        require(activeProtocolId != 0, "No active protocol");
+
+        IProtocolAdapter adapter = registry.getAdapter(activeProtocolId, address(asset));
+        require(address(adapter) != address(0), "Invalid adapter");
+
         uint256 balance = asset.balanceOf(address(this));
         if (balance == 0) return;
+
+        console.log("Distributing assets to Active Protocol ID:", activeProtocolId);
         
-        // Distribute evenly across all active protocols
-        uint256 amountPerProtocol = balance / activeProtocolIds.length;
-        uint256 totalDistributed = 0;
-        
-        for (uint i = 0; i < activeProtocolIds.length; i++) {
-            uint256 protocolId = activeProtocolIds[i];
-            IProtocolAdapter adapter = registry.getAdapter(protocolId, address(asset));
-            
-            // Approve the adapter to spend our assets
-            asset.approve(address(adapter), amountPerProtocol);
-            
-            // Supply assets to the protocol and track how much was actually accepted
-            uint256 supplied = adapter.supply(address(asset), amountPerProtocol);
-            totalDistributed += supplied;
-        }
-        
+        // Approve the protocol adapter to spend our funds
+        asset.approve(address(adapter), balance);
+
+        // Supply the entire balance to the active protocol
+        uint256 supplied = adapter.supply(address(asset), balance);
+        console.log("Supplied to Protocol ID:", activeProtocolId, "Amount:", supplied);
     }
-    
+
+        
     /**
      * @dev Internal function to withdraw from protocols
      * @param amount Amount to withdraw
@@ -447,7 +477,7 @@ contract CombinedVault is IVault, ReentrancyGuard {
      * @dev Internal function to withdraw all funds from a specific protocol
      * @param protocolId ID of the protocol
      */
-    function _withdrawAllFromProtocol(uint256 protocolId) internal {
+    function _withdrawAllFromProtocol(uint256 protocolId) public onlyOwnerOrAuthorized {
         IProtocolAdapter adapter = registry.getAdapter(protocolId, address(asset));
         
         // Get current balance in the protocol
@@ -456,6 +486,7 @@ contract CombinedVault is IVault, ReentrancyGuard {
         if (balance > 0) {
             // Withdraw all funds
             uint256 withdrawn = adapter.withdraw(address(asset), balance);
+            console.log("Amount withdrawn:", withdrawn);
         }
     }
 

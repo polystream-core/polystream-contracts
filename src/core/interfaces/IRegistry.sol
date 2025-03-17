@@ -93,9 +93,14 @@ interface IRegistry {
     ) external view returns (bool);
 
     /**
-     *
      * @dev Transfer ownership of the registry
      * @param newOwner The address of the new owner
      */
     function transferOwnership(address newOwner) external;
+
+    /**
+     * @dev Set an authorized external caller (e.g., Yield Optimizer)
+     * @param newCaller The address of the authorized caller
+     */
+    function setAuthorizedCaller(address newCaller) external;
 }

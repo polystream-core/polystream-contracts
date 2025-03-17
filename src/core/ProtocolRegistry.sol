@@ -24,18 +24,28 @@ contract ProtocolRegistry is IRegistry {
     // Owner address
     address public owner;
     
+    // Authorized external caller (e.g., YieldOptimizer)
+    address public authorizedCaller;
+
     // Events
     event ProtocolRegistered(uint256 indexed protocolId, string name);
     event AdapterRegistered(uint256 indexed protocolId, address indexed asset, address adapter);
     event AdapterRemoved(uint256 indexed protocolId, address indexed asset);
     event ActiveProtocolSet(uint256 indexed protocolId);
+    event AuthorizedCallerUpdated(address indexed oldCaller, address indexed newCaller);
     
     // Modifier to check if the caller is the owner
     modifier onlyOwner() {
         require(msg.sender == owner, "Caller is not the owner");
         _;
     }
-    
+
+    // Modifier to check if the caller is either the owner or the authorized caller
+    modifier onlyOwnerOrAuthorized() {
+        require(msg.sender == owner || msg.sender == authorizedCaller, "Caller is not authorized");
+        _;
+    }
+
     /**
      * @dev Constructor
      */
@@ -48,7 +58,7 @@ contract ProtocolRegistry is IRegistry {
      * @param protocolId The unique ID for the protocol
      * @param name The name of the protocol
      */
-    function registerProtocol(uint256 protocolId, string memory name) external override onlyOwner {
+    function registerProtocol(uint256 protocolId, string memory name) external override onlyOwnerOrAuthorized {
         require(bytes(protocolNames[protocolId]).length == 0, "Protocol ID already used");
         
         protocolNames[protocolId] = name;
@@ -63,7 +73,7 @@ contract ProtocolRegistry is IRegistry {
      * @param asset The address of the asset
      * @param adapter The address of the adapter
      */
-    function registerAdapter(uint256 protocolId, address asset, address adapter) external override onlyOwner {
+    function registerAdapter(uint256 protocolId, address asset, address adapter) external override onlyOwnerOrAuthorized {
         require(bytes(protocolNames[protocolId]).length > 0, "Protocol not registered");
         require(IProtocolAdapter(adapter).isAssetSupported(asset), "Asset not supported by adapter");
         
@@ -83,7 +93,7 @@ contract ProtocolRegistry is IRegistry {
      * @param protocolId The ID of the protocol
      * @param asset The address of the asset
      */
-    function removeAdapter(uint256 protocolId, address asset) external override onlyOwner {
+    function removeAdapter(uint256 protocolId, address asset) external override onlyOwnerOrAuthorized {
         require(adapters[protocolId][asset] != address(0), "Adapter not registered");
         
         delete adapters[protocolId][asset];
@@ -100,12 +110,22 @@ contract ProtocolRegistry is IRegistry {
      * @dev Set the active protocol ID
      * @param protocolId The protocol ID to set as active
      */
-    function setActiveProtocol(uint256 protocolId) external override onlyOwner {
+    function setActiveProtocol(uint256 protocolId) external override onlyOwnerOrAuthorized {
         require(bytes(protocolNames[protocolId]).length > 0, "Protocol not registered");
         activeProtocolId = protocolId;
         emit ActiveProtocolSet(protocolId);
     }
     
+    /**
+     * @dev Set an authorized external caller (e.g., YieldOptimizer)
+     * @param newCaller The address of the new authorized contract
+     */
+    function setAuthorizedCaller(address newCaller) external onlyOwner {
+        require(newCaller != address(0), "Invalid address");
+        emit AuthorizedCallerUpdated(authorizedCaller, newCaller);
+        authorizedCaller = newCaller;
+    }
+
     /**
      * @dev Get the adapter for a specific protocol and asset
      * @param protocolId The ID of the protocol
