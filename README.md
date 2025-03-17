@@ -252,7 +252,7 @@ forge test --fork-url http://127.0.0.1:8545 --match-path test/YOUR_TEST_SCRIPT.t
 Replace `YOUR_TEST_SCRIPT.t.sol` with the actual test file name.
 Example:
 ```sh
-forge test --fork-url http://127.0.0.1:8545 --match-path test/CompoundAdapterTest.t.sol -vvv
+forge test --fork-url http://127.0.0.1:8545 --match-path test/AaveAdapterTest.t.sol -vvv
 ```
 Explanation of Flags:
 - --fork-url `http://127.0.0.1:8545`→ Connects to the locally running Anvil fork.
