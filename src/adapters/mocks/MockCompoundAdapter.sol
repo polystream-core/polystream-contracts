@@ -107,6 +107,14 @@ contract MockCompoundAdapter is IProtocolAdapter, Ownable {
         
         return receivedAmount;
     }
+
+        /**
+     * @dev Add a supported asset
+     * @param asset The address of the asset
+     */
+    function addSupportedAsset(address asset) external onlyOwner {
+        supportedAssets[asset] = true;
+    }
     
     /**
      * @dev Withdraw assets from the protocol
