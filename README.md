@@ -107,7 +107,7 @@ The strategy contracts automate and optimize yield farming strategies:
 **Yield Optimizer and Check & Harvest automation details**
 ### Low Risk
 
-- [Yield Optimizer](https://automation.chain.link/base-sepolia/107443536759514165874241348299091642006288174294890837793929995441409617679000)
+- [Yield Optimizer](https://automation.chain.link/base-sepolia/19592633126236891682666043125258171533116166520941179685825646141645925432339)
 - [Check & Harvest](https://automation.chain.link/base-sepolia/87721494756957191100234032125401142591208032377220498353673678292683728673730)
 
 ### Medium Risk
