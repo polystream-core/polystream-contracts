@@ -1,0 +1,79 @@
+No files changed, compilation skipped
+
+Ran 5 tests for test/CompoundAdapterTest.t.sol:CompoundAdapterTest
+[PASS] testConvertFeeToReward() (gas: 138015)
+Logs:
+  MockUSDC deployed at: 0x3Ede3eCa2a72B3aeCC820E955B36f38437D01395
+  Registry deployed at: 0x6D9da78B6A5BEdcA287AA5d49613bA36b90c15C4
+  MockCompoundAdapter deployed at: 0xDDd9A038D57372934f1b9c52bd8621F5ED4268DF
+  Added adapter as minter for MockUSDC
+  Test setup complete
+  User1 USDC balance: 10000000000
+  User2 USDC balance: 10000000000
+  ===== Testing Convert Fee to Reward =====
+  Initial principal: 1000000000
+  Fee amount to convert: 50000000
+  Final principal: 950000000
+
+[PASS] testGetAPY() (gas: 31363)
+Logs:
+  MockUSDC deployed at: 0x3Ede3eCa2a72B3aeCC820E955B36f38437D01395
+  Registry deployed at: 0x6D9da78B6A5BEdcA287AA5d49613bA36b90c15C4
+  MockCompoundAdapter deployed at: 0xDDd9A038D57372934f1b9c52bd8621F5ED4268DF
+  Added adapter as minter for MockUSDC
+  Test setup complete
+  User1 USDC balance: 10000000000
+  User2 USDC balance: 10000000000
+  ===== Testing Get APY =====
+  Current APY (bps): 450
+  Updated APY (bps): 550
+
+[PASS] testHarvestYield() (gas: 204295)
+Logs:
+  MockUSDC deployed at: 0x3Ede3eCa2a72B3aeCC820E955B36f38437D01395
+  Registry deployed at: 0x6D9da78B6A5BEdcA287AA5d49613bA36b90c15C4
+  MockCompoundAdapter deployed at: 0xDDd9A038D57372934f1b9c52bd8621F5ED4268DF
+  Added adapter as minter for MockUSDC
+  Test setup complete
+  User1 USDC balance: 10000000000
+  User2 USDC balance: 10000000000
+  ===== Testing Harvest Yield =====
+  User1 deposited: 1000000000
+  Estimated interest after 30 days: 123287
+  Harvested amount: 123287
+  Time since harvest: 0
+  Time since harvest after 15 days: 1296000
+
+[PASS] testSupplyAndWithdraw() (gas: 148964)
+Logs:
+  MockUSDC deployed at: 0x3Ede3eCa2a72B3aeCC820E955B36f38437D01395
+  Registry deployed at: 0x6D9da78B6A5BEdcA287AA5d49613bA36b90c15C4
+  MockCompoundAdapter deployed at: 0xDDd9A038D57372934f1b9c52bd8621F5ED4268DF
+  Added adapter as minter for MockUSDC
+  Test setup complete
+  User1 USDC balance: 10000000000
+  User2 USDC balance: 10000000000
+  ===== Testing Supply and Withdraw =====
+  User1 supplied: 1000000000
+  Adapter balance: 1000000000
+  Total principal: 1000000000
+  Withdrawn amount: 500000000
+  Total principal after withdrawal: 500000000
+
+[PASS] testWithdrawToUser() (gas: 148786)
+Logs:
+  MockUSDC deployed at: 0x3Ede3eCa2a72B3aeCC820E955B36f38437D01395
+  Registry deployed at: 0x6D9da78B6A5BEdcA287AA5d49613bA36b90c15C4
+  MockCompoundAdapter deployed at: 0xDDd9A038D57372934f1b9c52bd8621F5ED4268DF
+  Added adapter as minter for MockUSDC
+  Test setup complete
+  User1 USDC balance: 10000000000
+  User2 USDC balance: 10000000000
+  ===== Testing Withdraw To User =====
+  User2 initial balance: 10000000000
+  Withdrawn to User2: 500000000
+  User2 final balance: 10500000000
+
+Suite result: ok. 5 passed; 0 failed; 0 skipped; finished in 595.20ms (20.55ms CPU time)
+
+Ran 1 test suite in 622.00ms (595.20ms CPU time): 5 tests passed, 0 failed, 0 skipped (5 total tests)

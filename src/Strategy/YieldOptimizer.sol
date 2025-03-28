@@ -4,7 +4,6 @@ pragma solidity ^0.8.19;
 import "../core/CombinedVault.sol";
 import "../core/interfaces/IRegistry.sol";
 import "../adapters/interfaces/IProtocolAdapter.sol";
-import "forge-std/console.sol"; // ✅ Import Foundry logging
 
 contract YieldOptimizer {
     IRegistry public registry;
@@ -27,15 +26,12 @@ contract YieldOptimizer {
      * @dev Called automatically via Chainlink Automation at the end of each epoch
      */
     function optimizeYield() external {
-        console.log("Optimizing yield...");
-
         uint256 activeProtocolId = registry.getActiveProtocolId();
         address activeAdapter = address(registry.getAdapter(activeProtocolId, address(asset)));
 
         require(activeAdapter != address(0), "Active adapter not found");
 
         uint256 currentAPY = IProtocolAdapter(activeAdapter).getAPY(address(asset));
-        console.log("Current active protocol:", activeProtocolId, "APY:", currentAPY);
 
         uint256[] memory allProtocols = registry.getAllProtocolIds();
         uint256 highestAPY = currentAPY;
@@ -47,7 +43,6 @@ contract YieldOptimizer {
 
             if (protocolAdapter != address(0)) {
                 uint256 apy = IProtocolAdapter(protocolAdapter).getAPY(address(asset));
-                console.log("Checking protocol:", protocolId, "APY:", apy);
 
                 if (apy > highestAPY) {
                     highestAPY = apy;
@@ -58,23 +53,17 @@ contract YieldOptimizer {
 
         if (bestProtocolId != activeProtocolId) {
             uint256 vaultBalance = vault.getTotalSupply();
-            console.log("Switching protocol! Vault Balance:", vaultBalance);
 
             // ✅ Withdraw all assets from the current protocol
             vault._withdrawAllFromProtocol(activeProtocolId);
-            console.log("Withdrawn from old protocol:", activeProtocolId);
 
             // ✅ Update to the new protocol
             registry.setActiveProtocol(bestProtocolId);
-            console.log("Updated active protocol to:", bestProtocolId);
 
             // ✅ Supply the entire vault balance to the new protocol
             vault.supplyToProtocol(bestProtocolId, vaultBalance);
-            console.log("Supplied to new protocol via Vault:", bestProtocolId);
 
             emit OptimizedYield(activeProtocolId, bestProtocolId, vaultBalance);
-        } else {
-            console.log("No better APY found. No changes made.");
         }
     }
 }
